@@ -218,3 +218,6 @@ the 2.2.5 shape. The published tests do not require a DOM.
    `package.json` refers to it with `"license": "SEE LICENSE IN LICENSE"`. Never
    replace it with plain MIT: the Commons Clause is what forbids selling the
    plugin. Do not describe the project as OSI-approved open source.
+10. Write the GitHub release notes in English, using the `## Changes` and
+    `## Upgrade` sections. README, `AGENTS.md` and release notes stay English;
+    Russian exists only in the plugin's i18n strings and settings UI.
