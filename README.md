@@ -60,7 +60,7 @@ Or add the package to `plugins` in the global `opencode.json(c)`:
 Pin a tag or a commit when you need a stable snapshot:
 
 ```jsonc
-"plugins": ["github:aleksslab/opencode-model-fallback-gui#v2.1.0"]
+"plugins": ["github:aleksslab/opencode-model-fallback-gui#v2.1.1"]
 ```
 
 Updates are not applied silently to unpinned Git packages; run

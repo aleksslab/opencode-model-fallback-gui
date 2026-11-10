@@ -169,7 +169,7 @@ const definition = Plugin.define({
       confirmCancel: "Отмена",
       declinedBody: "Платные модели пропущены: бесплатных в цепочке больше нет.",
       confirmUnavailable: "Подтверждение недоступно в этой версии OpenCode, поэтому платные модели пропущены.",
-      badge: "Резерв",
+      badge: "Автосмена",
       badgeTitle: "Последнее переключение",
       badgeDetails: "С {{from}} на {{to}}. Причина: {{reason}}.",
       badgeAria: "Показать последнее переключение",

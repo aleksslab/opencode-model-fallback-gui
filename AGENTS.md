@@ -193,7 +193,7 @@ the 2.2.5 shape. The published tests do not require a DOM.
    `opencode-model-fallback-gui`, while the plugin id stays
    `local-model-fallback`.
 7. Bump `version`, commit, and tag the release
-   (`git tag v2.1.0 && git push --tags`). The plugin is distributed through Git,
+   (`git tag v2.1.1 && git push --tags`). The plugin is distributed through Git,
    not npm.
 8. Git installs (`opencode plugin add github:aleksslab/opencode-model-fallback-gui`)
    use the committed `dist`; rebuild and commit before tagging.
