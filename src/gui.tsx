@@ -1,0 +1,1170 @@
+import { Index, onCleanup } from "solid-js"
+import { Schema } from "effect"
+import { Plugin, Store, SettingsPage, createKeyed } from "@opencode/plugin/gui"
+
+/* ------------------------------------------------------------------------- */
+/* Config                                                                     */
+/* ------------------------------------------------------------------------- */
+
+const DEFAULTS = {
+  enabled: true,
+  notifyOnFallback: true,
+  autoRetry: true,
+  fallbackOnAnyError: false,
+  retryCodes: "429, 408, 500, 502, 503, 504, 529",
+  patterns: [],
+  maxAttempts: "10",
+  cooldownSeconds: "60",
+  timeoutSeconds: "120",
+  triggerText: "Continue",
+  models: [],
+}
+
+type Config = typeof DEFAULTS
+
+const ConfigSchema = Schema.Struct({
+  enabled: Schema.Boolean,
+  notifyOnFallback: Schema.Boolean,
+  autoRetry: Schema.Boolean,
+  fallbackOnAnyError: Schema.Boolean,
+  retryCodes: Schema.String,
+  patterns: Schema.Array(Schema.String),
+  maxAttempts: Schema.String,
+  cooldownSeconds: Schema.String,
+  timeoutSeconds: Schema.String,
+  triggerText: Schema.String,
+  models: Schema.Array(Schema.String),
+})
+
+const definition = Plugin.define({
+  // Stored as plugin.<id>.config in the app's own storage, loaded before setup.
+  stores: {
+    config: Store.global(ConfigSchema, DEFAULTS),
+  },
+  i18n: {
+    en: {
+      title: "Model fallback",
+      description:
+        "When the active model fails or stops responding, switch the session to the next model in the chain.",
+      sectionGeneral: "General",
+      sectionTriggers: "When to switch",
+      sectionLimits: "Limits",
+      sectionChain: "Fallback chain",
+      sectionResume: "Resume",
+      enabled: "Enable fallback",
+      enabledDescription: "Turn automatic model switching on or off.",
+      notify: "Show notifications",
+      notifyDescription: "Show a toast whenever a model is switched.",
+      codes: "HTTP status codes",
+      codesDescription: "Comma or space separated. A matching status triggers a switch.",
+      patterns: "Error message patterns",
+      patternsDescription: "Case-insensitive regular expressions matched against the error message.",
+      patternN: "Pattern {{n}}",
+      addPattern: "Add pattern",
+      anyError: "Switch on any error",
+      anyErrorDescription: "Switch even when the error is not matched by a status code or pattern.",
+      maxAttempts: "Maximum switches",
+      maxAttemptsDescription: "How many models may be tried in one turn before giving up.",
+      cooldown: "Cooldown (seconds)",
+      cooldownDescription: "A model that just failed is skipped for this long.",
+      timeout: "First token timeout (seconds)",
+      timeoutDescription: "Switch when a model produces nothing within this time. 0 disables it. Long prompts may need more than 30 seconds.",
+      triggerText: "Resume prompt",
+      triggerTextDescription: "Text sent to the session after switching, when auto-resume is on.",
+      autoRetry: "Auto-resume",
+      autoRetryDescription: "Send the resume prompt after switching so the answer continues.",
+      modelsDescription:
+        "Tried top to bottom. Each entry is provider/model-id. Case is ignored, and entries no connected provider offers are skipped.",
+      modelN: "Model {{n}}",
+      addModel: "Add model",
+      reset: "Reset to defaults",
+      moveUp: "Move up",
+      moveDown: "Move down",
+      remove: "Remove",
+      entryEnabled: "Enable fallback",
+      entryTrigger: "Error triggers",
+      entryChain: "Fallback chain",
+      entryLimits: "Limits and timeout",
+      entryResume: "Resume prompt",
+      switchedTitle: "Model fallback",
+      switchedBody: "Switched to {{model}} ({{reason}})",
+      exhaustedTitle: "Fallback exhausted",
+      exhaustedBody: "No model in the chain is available right now.",
+      noChain: "The fallback chain is empty.",
+      coolingBody: "Every other model in the chain is cooling down after a failure. Try again shortly.",
+      unresolvedBody: "Not offered by any connected provider: {{models}}",
+    },
+    ru: {
+      title: "Переключение моделей",
+      description:
+        "Когда активная модель падает или перестаёт отвечать, сессия переключается на следующую модель из цепочки.",
+      sectionGeneral: "Основные",
+      sectionTriggers: "Когда переключать",
+      sectionLimits: "Ограничения",
+      sectionChain: "Цепочка моделей",
+      sectionResume: "Продолжение",
+      enabled: "Включить переключение",
+      enabledDescription: "Включить или выключить автоматическую смену модели.",
+      notify: "Показывать уведомления",
+      notifyDescription: "Показывать всплывающее уведомление при каждой смене модели.",
+      codes: "HTTP-коды ошибок",
+      codesDescription: "Через запятую или пробел. Совпавший код запускает переключение.",
+      patterns: "Шаблоны текста ошибок",
+      patternsDescription: "Регулярные выражения без учёта регистра, проверяются по тексту ошибки.",
+      patternN: "Шаблон {{n}}",
+      addPattern: "Добавить шаблон",
+      anyError: "Переключать при любой ошибке",
+      anyErrorDescription: "Переключать, даже если ошибка не совпала ни с кодом, ни с шаблоном.",
+      maxAttempts: "Максимум переключений",
+      maxAttemptsDescription: "Сколько моделей можно попробовать за один ход.",
+      cooldown: "Кулдаун (секунды)",
+      cooldownDescription: "Сколько не использовать модель, которая только что упала.",
+      timeout: "Таймаут первого токена (секунды)",
+      timeoutDescription: "Переключить, если модель ничего не выдала за это время. 0 — выключено. Длинным промптам может понадобиться больше 30 секунд.",
+      triggerText: "Текст продолжения",
+      triggerTextDescription: "Что отправить в сессию после переключения, если включено автопродолжение.",
+      autoRetry: "Автопродолжение",
+      autoRetryDescription: "Отправлять текст продолжения после переключения, чтобы ответ не оборвался.",
+      modelsDescription:
+        "Пробуются сверху вниз. Формат: provider/model-id. Регистр не важен, недоступные у провайдеров записи пропускаются.",
+      modelN: "Модель {{n}}",
+      addModel: "Добавить модель",
+      reset: "Сбросить настройки",
+      moveUp: "Выше",
+      moveDown: "Ниже",
+      remove: "Удалить",
+      entryEnabled: "Включение переключения",
+      entryTrigger: "Триггеры ошибок",
+      entryChain: "Цепочка моделей",
+      entryLimits: "Лимиты и таймаут",
+      entryResume: "Текст продолжения",
+      switchedTitle: "Переключение модели",
+      switchedBody: "Включена модель {{model}} ({{reason}})",
+      exhaustedTitle: "Модели закончились",
+      exhaustedBody: "Ни одна модель из цепочки сейчас недоступна.",
+      noChain: "Цепочка моделей пуста.",
+      coolingBody: "Все остальные модели цепочки на кулдауне после ошибок. Попробуйте чуть позже.",
+      unresolvedBody: "Нет у подключённых провайдеров: {{models}}",
+    },
+  },
+})
+
+/* ------------------------------------------------------------------------- */
+/* Helpers                                                                    */
+/* ------------------------------------------------------------------------- */
+
+const BUILTIN_PATTERNS = [
+  /rate[\s_-]?limit/i,
+  /too many requests/i,
+  /quota/i,
+  /resource exhausted/i,
+  /high demand/i,
+  /overloaded/i,
+  /over capacity/i,
+  /billing/i,
+  /insufficient/i,
+  /payment required/i,
+  /suspended/i,
+  /invalid api key/i,
+  /api key.*(invalid|expired|missing)/i,
+  /unauthorized/i,
+  /forbidden/i,
+  /model .*(not found|not available|not supported|unavailable)/i,
+  /no such model/i,
+  /timed? ?out/i,
+  /timeout/i,
+  /fetch failed/i,
+  /network error/i,
+  /econn(reset|refused|aborted)/i,
+  /socket hang ?up/i,
+  /connection.*(reset|refused|closed)/i,
+  /bad gateway/i,
+  /service unavailable/i,
+  /internal server error/i,
+  /gateway time-?out/i,
+  /upstream/i,
+  /api_apicallerror/i,
+  /provider returned error/i,
+  /provider error/i,
+  /invalid_request_error/i,
+  /server_error/i,
+  /something went wrong/i,
+]
+
+function int(value: string, fallback: number) {
+  const parsed = Number.parseInt(value, 10)
+  return Number.isFinite(parsed) ? parsed : fallback
+}
+
+function parseCodes(value: string) {
+  return value
+    .split(/[^0-9]+/)
+    .map((part) => Number.parseInt(part, 10))
+    .filter((code) => Number.isFinite(code) && code >= 100 && code <= 599)
+}
+
+function compilePatterns(patterns: string[]) {
+  return patterns
+    .map((pattern) => pattern.trim())
+    .filter(Boolean)
+    .map((pattern) => {
+      try {
+        return new RegExp(pattern, "i")
+      } catch {
+        return undefined
+      }
+    })
+    .filter((regex): regex is RegExp => regex !== undefined)
+}
+
+/** Split a chain entry such as "provider/model-id". */
+function splitModel(path: string) {
+  const trimmed = path.trim()
+  const slash = trimmed.indexOf("/")
+  if (slash <= 0 || slash === trimmed.length - 1) return undefined
+  return { providerID: trimmed.slice(0, slash), modelID: trimmed.slice(slash + 1) }
+}
+
+type Model = { providerID: string; modelID: string }
+
+function modelPath(model: Model) {
+  return `${model.providerID}/${model.modelID}`
+}
+
+/** Provider and model ids compare case-insensitively, as providers spell them inconsistently. */
+function normalize(value: string) {
+  return value.trim().toLowerCase()
+}
+
+function modelIdsMatch(a: string, b: string) {
+  const left = normalize(a)
+  const right = normalize(b)
+  return left === right || left.endsWith(`/${right}`) || right.endsWith(`/${left}`)
+}
+
+function sameModel(a: Model, b: Model) {
+  return normalize(a.providerID) === normalize(b.providerID) && modelIdsMatch(a.modelID, b.modelID)
+}
+
+/** Stable key for cooldown and attempt bookkeeping. */
+function modelKey(model: Model) {
+  return `${normalize(model.providerID)}/${normalize(model.modelID)}`
+}
+
+/** Match a chain entry against a live model, tolerating case and provider-prefixed model ids. */
+function entryMatches(entry: string, model: Model) {
+  const parsed = splitModel(entry)
+  if (!parsed || normalize(parsed.providerID) !== normalize(model.providerID)) return false
+  return modelIdsMatch(parsed.modelID, model.modelID)
+}
+
+function matchError(error: any, config: Config) {
+  const status = typeof error?.status === "number" ? error.status : undefined
+  const message = `${error?.message ?? ""} ${error?.response?.body ?? ""}`.trim()
+
+  if (status !== undefined && parseCodes(config.retryCodes).includes(status)) {
+    return `HTTP ${status}`
+  }
+
+  for (const regex of BUILTIN_PATTERNS) {
+    if (message && regex.test(message)) return message.slice(0, 120)
+  }
+
+  for (const regex of compilePatterns(config.patterns)) {
+    if (message && regex.test(message)) return `/${regex.source}/`
+  }
+
+  if (config.fallbackOnAnyError) return message.slice(0, 120) || "error"
+
+  return undefined
+}
+
+/* ------------------------------------------------------------------------- */
+/* Model catalog                                                              */
+/* ------------------------------------------------------------------------- */
+
+type Catalog = { models: Model[]; providers: string[]; available: boolean }
+
+const CATALOG_TTL = 15_000
+const catalogCache = new Map<string, { at: number; value: Catalog }>()
+
+function readLocation(server: any, location: any) {
+  const store = server?.data?.location
+  const models: Model[] = (store?.model?.list?.(location) ?? []).map((model: any) => ({
+    providerID: String(model.providerID),
+    modelID: String(model.modelID),
+  }))
+  const providers: string[] = (store?.provider?.list?.(location) ?? []).map((provider: any) => String(provider.id))
+  return { models, providers }
+}
+
+/** Live catalog of the server, used to turn a chain entry into canonical ids. */
+async function catalogFor(server: any, location: any): Promise<Catalog> {
+  const cacheKey = String(server?.id ?? "")
+  const cached = catalogCache.get(cacheKey)
+  if (cached && Date.now() - cached.at < CATALOG_TTL) return cached.value
+
+  let { models, providers } = readLocation(server, location)
+  if (models.length === 0 || providers.length === 0) {
+    try {
+      await server?.data?.location?.model?.sync?.(location)
+    } catch {
+      // The catalog may already be loading; the app retries on its own.
+    }
+    try {
+      await server?.data?.location?.provider?.sync?.(location)
+    } catch {
+      // Same as above.
+    }
+    const next = readLocation(server, location)
+    if (next.models.length > 0 || next.providers.length > 0) {
+      models = next.models
+      providers = next.providers
+    }
+  }
+
+  const value = { models, providers, available: models.length > 0 || providers.length > 0 }
+  catalogCache.set(cacheKey, { at: Date.now(), value })
+  return value
+}
+
+/**
+ * Resolve a chain entry to the ids the provider actually uses. Matching ignores
+ * case and provider-prefixed model ids, so configs copied from other tools work.
+ */
+function resolveEntry(entry: string, catalog: Catalog): Model | undefined {
+  const parsed = splitModel(entry)
+  if (!parsed) return undefined
+  if (!catalog.available) return parsed
+
+  const model = catalog.models.find(
+    (candidate) =>
+      normalize(candidate.providerID) === normalize(parsed.providerID) &&
+      modelIdsMatch(candidate.modelID, parsed.modelID),
+  )
+  if (model) return model
+
+  // Keep an entry whose provider is connected but whose model the catalog does
+  // not list: `setModel` decides whether the provider still accepts it.
+  const provider = catalog.providers.find((id) => normalize(id) === normalize(parsed.providerID))
+  if (provider) return { providerID: provider, modelID: parsed.modelID }
+
+  return undefined
+}
+
+/* ------------------------------------------------------------------------- */
+/* Layout                                                                     */
+/* ------------------------------------------------------------------------- */
+
+const CARD = {
+  border: "1px solid rgba(128, 128, 128, 0.24)",
+  "border-radius": "10px",
+  overflow: "hidden",
+}
+
+const rowStyle = {
+  display: "flex",
+  "align-items": "center",
+  gap: "12px",
+  padding: "10px 14px",
+  "border-bottom": "1px solid rgba(128, 128, 128, 0.14)",
+}
+
+const clusterStyle = {
+  display: "flex",
+  "align-items": "center",
+  gap: "6px",
+  "flex-wrap": "wrap",
+  "justify-content": "flex-end",
+}
+
+const fieldStyle = {
+  width: "300px",
+  "max-width": "100%",
+}
+
+/* ------------------------------------------------------------------------- */
+/* GUI plugin                                                                 */
+/* ------------------------------------------------------------------------- */
+
+export default Plugin.define({
+  ...definition,
+
+  setup(ctx) {
+    const ui = ctx.ui
+    const config = () => ctx.stores.config.value
+    const log = (...parts: unknown[]) => console.log("[Fallback]", ...parts)
+
+    /* -------- app components that only exist in newer desktop builds -------- */
+
+    const NativeLayout = (ui as any).SettingsLayout
+    const NativeSection = (ui as any).SettingsSection
+    const NativeRow = (ui as any).SettingsRow
+
+    const Layout = (props: any) => {
+      if (NativeLayout) {
+        return (
+          <NativeLayout title={props.title} description={props.description} actions={props.actions}>
+            {props.children}
+          </NativeLayout>
+        )
+      }
+
+      return (
+        <div
+          style={{
+            display: "flex",
+            "flex-direction": "column",
+            gap: "26px",
+            padding: "24px 24px 40px",
+            "max-width": "820px",
+          }}
+        >
+          <div style={{ display: "flex", "align-items": "flex-start", gap: "12px" }}>
+            <div style={{ flex: "1", "min-width": "0" }}>
+              <div style={{ "font-size": "18px", "font-weight": "600" }}>{props.title}</div>
+              <div style={{ "font-size": "13px", opacity: 0.65, "margin-top": "4px" }}>{props.description}</div>
+            </div>
+            {props.actions}
+          </div>
+          {props.children}
+        </div>
+      )
+    }
+
+    const Section = (props: any) => {
+      if (NativeSection) {
+        return (
+          <NativeSection title={props.title} footer={props.footer}>
+            {props.children}
+          </NativeSection>
+        )
+      }
+
+      return (
+        <section>
+          <div
+            style={{
+              "font-size": "12px",
+              "font-weight": "600",
+              "text-transform": "uppercase",
+              "letter-spacing": "0.05em",
+              opacity: 0.55,
+              "margin-bottom": "8px",
+            }}
+          >
+            {props.title}
+          </div>
+          <div style={CARD}>{props.children}</div>
+          {props.footer ? (
+            <div style={{ "font-size": "12px", opacity: 0.6, "margin-top": "6px" }}>{props.footer}</div>
+          ) : null}
+        </section>
+      )
+    }
+
+    const Row = (props: any) => {
+      if (NativeRow) {
+        return (
+          <NativeRow id={props.id} title={props.title} description={props.description}>
+            {props.children}
+          </NativeRow>
+        )
+      }
+
+      return (
+        <div data-action={props.id} style={rowStyle}>
+          <div style={{ flex: "1", "min-width": "0" }}>
+            <div style={{ "font-size": "13px" }}>{props.title}</div>
+            {props.description ? (
+              <div style={{ "font-size": "12px", opacity: 0.6, "margin-top": "2px" }}>{props.description}</div>
+            ) : null}
+          </div>
+          <div style={clusterStyle}>{props.children}</div>
+        </div>
+      )
+    }
+
+    /* ----------------------------- persisted edits ----------------------------- */
+
+    const edit = (mutate: (draft: Config) => void) => {
+      ctx.stores.config.update((draft) => {
+        mutate(draft as Config)
+      })
+    }
+
+    const reset = () => {
+      ctx.stores.config.set({
+        ...DEFAULTS,
+        patterns: [...DEFAULTS.patterns],
+        models: [...DEFAULTS.models],
+      })
+    }
+
+    /* -------------------------------- settings -------------------------------- */
+
+    const Settings = () => {
+      return (
+        <Layout
+          title={ctx.t("title")}
+          description={ctx.t("description")}
+          actions={
+            <ui.Button icon="reset" onClick={reset}>
+              {ctx.t("reset")}
+            </ui.Button>
+          }
+        >
+          <Section title={ctx.t("sectionGeneral")}>
+            <Row id="enabled" title={ctx.t("enabled")} description={ctx.t("enabledDescription")}>
+              <ui.Switch
+                label={ctx.t("enabled")}
+                hideLabel
+                checked={config().enabled}
+                onChange={(checked) => edit((draft) => (draft.enabled = checked))}
+              />
+            </Row>
+
+            <Row id="notify" title={ctx.t("notify")} description={ctx.t("notifyDescription")}>
+              <ui.Switch
+                label={ctx.t("notify")}
+                hideLabel
+                checked={config().notifyOnFallback}
+                onChange={(checked) => edit((draft) => (draft.notifyOnFallback = checked))}
+              />
+            </Row>
+
+            <Row id="auto-retry" title={ctx.t("autoRetry")} description={ctx.t("autoRetryDescription")}>
+              <ui.Switch
+                label={ctx.t("autoRetry")}
+                hideLabel
+                checked={config().autoRetry}
+                onChange={(checked) => edit((draft) => (draft.autoRetry = checked))}
+              />
+            </Row>
+          </Section>
+
+          <Section title={ctx.t("sectionTriggers")}>
+            <Row id="codes" title={ctx.t("codes")} description={ctx.t("codesDescription")}>
+              <div style={fieldStyle}>
+                <ui.TextInput
+                  label={ctx.t("codes")}
+                  value={config().retryCodes}
+                  placeholder="429, 500, 502, 503, 504"
+                  onInput={(value) => edit((draft) => (draft.retryCodes = value))}
+                />
+              </div>
+            </Row>
+
+            <Row id="any-error" title={ctx.t("anyError")} description={ctx.t("anyErrorDescription")}>
+              <ui.Switch
+                label={ctx.t("anyError")}
+                hideLabel
+                checked={config().fallbackOnAnyError}
+                onChange={(checked) => edit((draft) => (draft.fallbackOnAnyError = checked))}
+              />
+            </Row>
+
+            <Row id="patterns" title={ctx.t("patterns")} description={ctx.t("patternsDescription")}>
+              <ui.Button icon="plus" size="small" onClick={() => edit((draft) => draft.patterns.push(""))}>
+                {ctx.t("addPattern")}
+              </ui.Button>
+            </Row>
+
+            <Index each={config().patterns}>
+              {(pattern, index) => (
+                <Row title={ctx.t("patternN", { n: index + 1 })}>
+                  <div style={fieldStyle}>
+                    <ui.TextInput
+                      label={ctx.t("patternN", { n: index + 1 })}
+                      value={pattern()}
+                      placeholder="billing\\s+suspended"
+                      onInput={(value) =>
+                        edit((draft) => {
+                          draft.patterns[index] = value
+                        })
+                      }
+                    />
+                  </div>
+                  <ui.IconButton
+                    icon="trash"
+                    label={ctx.t("remove")}
+                    onClick={() =>
+                      edit((draft) => {
+                        draft.patterns.splice(index, 1)
+                      })
+                    }
+                  />
+                </Row>
+              )}
+            </Index>
+          </Section>
+
+          <Section title={ctx.t("sectionLimits")}>
+            <Row id="max-attempts" title={ctx.t("maxAttempts")} description={ctx.t("maxAttemptsDescription")}>
+              <div style={{ width: "110px" }}>
+                <ui.TextInput
+                  label={ctx.t("maxAttempts")}
+                  value={config().maxAttempts}
+                  onInput={(value) => edit((draft) => (draft.maxAttempts = value))}
+                />
+              </div>
+            </Row>
+
+            <Row id="cooldown" title={ctx.t("cooldown")} description={ctx.t("cooldownDescription")}>
+              <div style={{ width: "110px" }}>
+                <ui.TextInput
+                  label={ctx.t("cooldown")}
+                  value={config().cooldownSeconds}
+                  onInput={(value) => edit((draft) => (draft.cooldownSeconds = value))}
+                />
+              </div>
+            </Row>
+
+            <Row id="timeout" title={ctx.t("timeout")} description={ctx.t("timeoutDescription")}>
+              <div style={{ width: "110px" }}>
+                <ui.TextInput
+                  label={ctx.t("timeout")}
+                  value={config().timeoutSeconds}
+                  onInput={(value) => edit((draft) => (draft.timeoutSeconds = value))}
+                />
+              </div>
+            </Row>
+          </Section>
+
+          <Section title={ctx.t("sectionChain")} footer={<span>{ctx.t("modelsDescription")}</span>}>
+            <Index each={config().models}>
+              {(model, index) => (
+                <Row id={index === 0 ? "models" : undefined} title={ctx.t("modelN", { n: index + 1 })}>
+                  <div style={fieldStyle}>
+                    <ui.TextInput
+                      label={ctx.t("modelN", { n: index + 1 })}
+                      value={model()}
+                      placeholder="provider/model-id"
+                      onInput={(value) =>
+                        edit((draft) => {
+                          draft.models[index] = value
+                        })
+                      }
+                    />
+                  </div>
+                  <ui.IconButton
+                    icon="arrow-up"
+                    label={ctx.t("moveUp")}
+                    disabled={index === 0}
+                    onClick={() =>
+                      edit((draft) => {
+                        const [item] = draft.models.splice(index, 1)
+                        draft.models.splice(index - 1, 0, item)
+                      })
+                    }
+                  />
+                  <ui.IconButton
+                    icon="arrow-down-to-line"
+                    label={ctx.t("moveDown")}
+                    disabled={index === config().models.length - 1}
+                    onClick={() =>
+                      edit((draft) => {
+                        const [item] = draft.models.splice(index, 1)
+                        draft.models.splice(index + 1, 0, item)
+                      })
+                    }
+                  />
+                  <ui.IconButton
+                    icon="trash"
+                    label={ctx.t("remove")}
+                    onClick={() =>
+                      edit((draft) => {
+                        draft.models.splice(index, 1)
+                      })
+                    }
+                  />
+                </Row>
+              )}
+            </Index>
+
+            <Row title={ctx.t("addModel")}>
+              <ui.Button icon="plus" size="small" onClick={() => edit((draft) => draft.models.push(""))}>
+                {ctx.t("addModel")}
+              </ui.Button>
+            </Row>
+          </Section>
+
+          <Section title={ctx.t("sectionResume")}>
+            <Row id="trigger" title={ctx.t("triggerText")} description={ctx.t("triggerTextDescription")}>
+              <div style={fieldStyle}>
+                <ui.TextInput
+                  label={ctx.t("triggerText")}
+                  value={config().triggerText}
+                  placeholder="Continue"
+                  onInput={(value) => edit((draft) => (draft.triggerText = value))}
+                />
+              </div>
+            </Row>
+          </Section>
+        </Layout>
+      )
+    }
+
+    ctx.add(SettingsPage, {
+      id: "local-model-fallback",
+      icon: "models",
+      get title() {
+        return ctx.t("title")
+      },
+      get entries() {
+        return [
+          { id: "local-model-fallback", title: ctx.t("title"), description: ctx.t("description") },
+          { id: "enabled", title: ctx.t("entryEnabled"), keywords: "fallback model provider" },
+          { id: "auto-retry", title: ctx.t("entryResume"), keywords: "resume continue retry" },
+          { id: "codes", title: ctx.t("entryTrigger"), keywords: "status http 429 500 error" },
+          { id: "any-error", title: ctx.t("anyError"), keywords: "error pattern" },
+          { id: "max-attempts", title: ctx.t("entryLimits"), keywords: "attempts cooldown timeout" },
+          { id: "models", title: ctx.t("entryChain"), keywords: "chain provider model" },
+          { id: "trigger", title: ctx.t("triggerText"), keywords: "continue prompt" },
+        ]
+      },
+      render: () => <Settings />,
+    })
+
+    /* ------------------------------ fallback engine ----------------------------- */
+
+    const attemptsBySession = new Map<string, number>()
+    /** Model key -> timestamp until which that model is skipped. */
+    const cooldownUntilByModel = new Map<string, number>()
+    const modelBySession = new Map<string, Model>()
+    const lastSetBySession = new Map<string, string>()
+
+    type Execution = {
+      /** Model the execution started on. Failures belong to it, not to whatever is selected later. */
+      model: Model | undefined
+      /** Set once this execution caused a switch; its remaining failures are the old model's. */
+      switched: boolean
+      /** Set once a resume prompt was sent for this execution. */
+      resumed: boolean
+    }
+
+    const executionBySession = new Map<string, Execution>()
+    /** Handled `session.retry.scheduled` assistant message ids, so late retries cannot switch twice. */
+    const handledRetries = new Map<string, Set<string>>()
+
+    let timeout: { sessionID: string; timer: ReturnType<typeof setTimeout> } | undefined
+
+    const cancelTimeout = () => {
+      if (timeout) {
+        clearTimeout(timeout.timer)
+        timeout = undefined
+      }
+    }
+
+    onCleanup(cancelTimeout)
+
+    const notify = (title: string, description: string, variant: "success" | "error") => {
+      if (!config().notifyOnFallback) return
+      ctx.toast.show({ variant, title, description, duration: 5000 })
+    }
+
+    const routedSession = (sessionID: string) => {
+      const session = ctx.sessions.current()
+      return session && session.id === sessionID ? session : undefined
+    }
+
+    const liveSession = (sessionID: string) => {
+      return routedSession(sessionID) ?? ctx.sessions.list().find((session) => session.id === sessionID)
+    }
+
+    const currentModel = (sessionID: string): Model | undefined => {
+      const session = routedSession(sessionID)
+      const composer = session ? ctx.screen.current()?.composer : undefined
+      const live = composer?.model()
+      if (live) {
+        modelBySession.set(sessionID, live)
+        return live
+      }
+      return modelBySession.get(sessionID)
+    }
+
+    /** State for the execution in flight, created lazily for servers that do not emit `started`. */
+    const executionFor = (sessionID: string): Execution => {
+      const existing = executionBySession.get(sessionID)
+      if (existing) return existing
+      const created: Execution = { model: currentModel(sessionID), switched: false, resumed: false }
+      executionBySession.set(sessionID, created)
+      return created
+    }
+
+    /** A new execution starts on whatever model is selected right now. */
+    const beginExecution = (sessionID: string) => {
+      const created: Execution = { model: currentModel(sessionID), switched: false, resumed: false }
+      executionBySession.set(sessionID, created)
+      log("execution started", sessionID, created.model ? modelPath(created.model) : "unknown model")
+    }
+
+    const retryHandled = (sessionID: string, messageID: unknown) => {
+      if (!messageID) return false
+      return handledRetries.get(sessionID)?.has(String(messageID)) ?? false
+    }
+
+    const markRetryHandled = (sessionID: string, messageID: unknown) => {
+      if (!messageID) return
+      let seen = handledRetries.get(sessionID)
+      if (!seen) {
+        seen = new Set()
+        handledRetries.set(sessionID, seen)
+      }
+      seen.add(String(messageID))
+      while (seen.size > 50) {
+        const oldest = seen.values().next().value
+        if (oldest === undefined) break
+        seen.delete(oldest)
+      }
+    }
+
+    const resume = async (sessionID: string) => {
+      const session = liveSession(sessionID)
+      if (!session) return
+      try {
+        await session.server.client.session.prompt({
+          sessionID,
+          text: config().triggerText.trim() || "Continue",
+        })
+      } catch (cause) {
+        log("resume failed", sessionID, String(cause))
+      }
+    }
+
+    const MAX_RETRY_AFTER_MS = 24 * 60 * 60 * 1000
+
+    /** Cooldown for a failed model; a provider's own retry hint wins when it is longer. */
+    const cooldownFor = (error: any, cfg: Config) => {
+      const base = Math.max(0, int(cfg.cooldownSeconds, 60)) * 1000
+      const retryAfter = Number(error?.retryAfterMs)
+      if (!Number.isFinite(retryAfter) || retryAfter <= base) return base
+      return Math.min(retryAfter, MAX_RETRY_AFTER_MS)
+    }
+
+    /** Chain entries after the current model, wrapping around. */
+    const candidates = (current: Model | undefined, cfg: Config) => {
+      const chain = cfg.models.map((entry) => entry.trim()).filter(Boolean)
+      if (chain.length === 0) return { chain, list: [] as string[] }
+
+      let start = 0
+      if (current) {
+        const index = chain.findIndex((entry) => entryMatches(entry, current))
+        if (index !== -1) start = index + 1
+      }
+
+      return { chain, list: [...chain.slice(start), ...chain.slice(0, start)] }
+    }
+
+    const switchTo = async (
+      sessionID: string,
+      current: Model,
+      reason: string,
+      options: { interrupt?: boolean; prompt?: boolean; cool?: boolean; coolForMs?: number },
+    ) => {
+      const cfg = config()
+      if (!cfg.enabled) return
+
+      const session = liveSession(sessionID)
+      if (!session) return
+
+      log("switch", sessionID, "from", modelPath(current), "reason:", reason)
+
+      // The user picked another model since our last switch: this turn starts fresh.
+      const lastSet = lastSetBySession.get(sessionID)
+      if (lastSet && lastSet !== modelKey(current)) {
+        attemptsBySession.delete(sessionID)
+        lastSetBySession.delete(sessionID)
+      }
+
+      const used = attemptsBySession.get(sessionID) ?? 0
+      const max = Math.max(1, int(cfg.maxAttempts, 10))
+      if (used >= max) {
+        notify(ctx.t("exhaustedTitle"), ctx.t("exhaustedBody"), "error")
+        return
+      }
+
+      const { chain, list } = candidates(current, cfg)
+      if (chain.length === 0) {
+        notify(ctx.t("exhaustedTitle"), ctx.t("noChain"), "error")
+        return
+      }
+
+      // Resolve entries to the ids the providers actually use before switching.
+      const catalog = await catalogFor(session.server, session.location)
+      log("catalog", catalog.available ? `${catalog.models.length} models / ${catalog.providers.length} providers` : "unavailable")
+      const now = Date.now()
+      const cooldownMs = Math.max(0, int(cfg.cooldownSeconds, 60)) * 1000
+      const skipped: string[] = []
+      const targets: { entry: string; target: Model }[] = []
+      let cooling = 0
+
+      for (const entry of list) {
+        const target = resolveEntry(entry, catalog)
+        if (!target) {
+          log("skip unresolved", entry)
+          skipped.push(entry)
+          continue
+        }
+        const until = cooldownUntilByModel.get(modelKey(target))
+        if (until !== undefined && now < until) {
+          log("skip cooling", entry, `${Math.ceil((until - now) / 1000)}s left`)
+          cooling++
+          continue
+        }
+        if (sameModel(target, current)) continue
+        targets.push({ entry, target })
+      }
+
+      const giveUp = () => {
+        if (skipped.length > 0) {
+          log("give up: unresolved", skipped.join(", "))
+          notify(ctx.t("exhaustedTitle"), ctx.t("unresolvedBody", { models: skipped.slice(0, 4).join(", ") }), "error")
+        } else if (cooling > 0) {
+          log("give up: cooling", cooling)
+          notify(ctx.t("exhaustedTitle"), ctx.t("coolingBody"), "error")
+        } else {
+          log("give up: no targets")
+          notify(ctx.t("exhaustedTitle"), ctx.t("exhaustedBody"), "error")
+        }
+      }
+
+      if (targets.length === 0) {
+        giveUp()
+        return
+      }
+
+      if (options.cool !== false) {
+        const key = modelKey(resolveEntry(modelPath(current), catalog) ?? current)
+        cooldownUntilByModel.set(key, now + (options.coolForMs ?? cooldownMs))
+      }
+
+      const composer = routedSession(sessionID) ? ctx.screen.current()?.composer : undefined
+
+      let switched: Model | undefined
+      for (const { entry, target } of targets) {
+        // Persist the change on the server first. `composer.setModel` only updates
+        // the UI; a prompt sent before the server knows the new model runs the old one.
+        try {
+          await session.server.client.session.switchModel({
+            sessionID,
+            model: { id: target.modelID, providerID: target.providerID },
+          })
+        } catch (cause) {
+          log("switchModel failed", entry, String(cause))
+          cooldownUntilByModel.set(modelKey(target), Date.now() + cooldownMs)
+          skipped.push(entry)
+          continue
+        }
+
+        if (composer && !composer.setModel(target)) log("setModel rejected", entry)
+
+        modelBySession.set(sessionID, target)
+        switched = target
+        break
+      }
+
+      if (!switched) {
+        giveUp()
+        return
+      }
+
+      log("switched to", modelPath(switched), "attempt", used + 1, "cool:", options.cool !== false)
+
+      attemptsBySession.set(sessionID, used + 1)
+      lastSetBySession.set(sessionID, modelKey(switched))
+
+      if (options.interrupt) {
+        try {
+          await session.server.client.session.interrupt({ sessionID })
+        } catch {
+          // The execution may already be over; nothing to stop.
+        }
+      }
+
+      if (cfg.autoRetry && options.prompt) await resume(sessionID)
+
+      notify(ctx.t("switchedTitle"), ctx.t("switchedBody", { model: modelPath(switched), reason }), "success")
+    }
+
+    const onFailure = (sessionID: string, error: any) => {
+      const cfg = config()
+      if (!cfg.enabled) return
+
+      const session = routedSession(sessionID)
+      if (!session) return
+
+      const reason = matchError(error, cfg)
+      if (!reason) return
+
+      // Attribute the failure to the model the execution started on. The composer
+      // may already show a different model because of an earlier switch.
+      const execution = executionFor(sessionID)
+      const model = execution.model ?? currentModel(sessionID)
+      if (!model) return
+
+      if (execution.switched) {
+        // This execution already caused a switch. Its remaining failures belong to
+        // the old model; resume on the currently selected one instead of walking the
+        // chain again and cooling healthy models.
+        log("stale failure", sessionID, modelPath(model), `(${reason})`, "resumed:", execution.resumed)
+        if (!execution.resumed && cfg.autoRetry) {
+          execution.resumed = true
+          void resume(sessionID)
+        }
+        return
+      }
+
+      execution.switched = true
+      execution.resumed = cfg.autoRetry
+
+      log("failure", sessionID, modelPath(model), `(${reason})`)
+      void switchTo(sessionID, model, reason, {
+        prompt: cfg.autoRetry,
+        coolForMs: cooldownFor(error, cfg),
+      })
+    }
+
+    const onRetryScheduled = (sessionID: string, error: any, messageID: unknown) => {
+      const cfg = config()
+      if (!cfg.enabled) return
+
+      const session = routedSession(sessionID)
+      if (!session) return
+
+      // The same retry can be announced more than once, and a retry scheduled for
+      // an execution that already switched must not trigger another switch.
+      if (retryHandled(sessionID, messageID)) {
+        log("ignore handled retry", sessionID, String(messageID))
+        return
+      }
+
+      const reason = matchError(error, cfg) ?? "retry scheduled"
+      const execution = executionFor(sessionID)
+      const model = execution.model ?? currentModel(sessionID)
+      if (!model) return
+
+      if (execution.switched) {
+        markRetryHandled(sessionID, messageID)
+        log("ignore retry from switched execution", sessionID, modelPath(model), `(${reason})`)
+        return
+      }
+
+      execution.switched = true
+      markRetryHandled(sessionID, messageID)
+
+      log("retry scheduled", sessionID, modelPath(model), `(${reason})`)
+      // The server retries on its own; only the model has to change. If the retry
+      // still fails, `execution.failed` resumes the turn on the new model.
+      void switchTo(sessionID, model, reason, { coolForMs: cooldownFor(error, cfg) })
+    }
+
+    const armTimeout = (sessionID: string) => {
+      const cfg = config()
+      const seconds = int(cfg.timeoutSeconds, 120)
+      if (seconds <= 0) return
+
+      const session = routedSession(sessionID)
+      if (!session) return
+
+      cancelTimeout()
+      log("arm timeout", sessionID, `${seconds}s`)
+      timeout = {
+        sessionID,
+        timer: setTimeout(() => {
+          timeout = undefined
+          const cfgNow = config()
+          if (!cfgNow.enabled || int(cfgNow.timeoutSeconds, 120) <= 0) return
+          if (!routedSession(sessionID)) return
+
+          const execution = executionFor(sessionID)
+          if (execution.switched) return
+
+          const current = execution.model ?? currentModel(sessionID)
+          if (!current) return
+
+          execution.switched = true
+          execution.resumed = cfgNow.autoRetry
+
+          log("timeout", sessionID, modelPath(current), `${int(cfgNow.timeoutSeconds, 120)}s`)
+          void switchTo(sessionID, current, `timeout ${int(cfgNow.timeoutSeconds, 120)}s`, {
+            interrupt: true,
+            prompt: cfgNow.autoRetry,
+            cool: false,
+          })
+        }, seconds * 1000),
+      }
+    }
+
+    /* --------------------------- event subscriptions --------------------------- */
+
+    createKeyed(
+      () => ctx.servers.get("sidecar")?.data,
+      (data) => {
+        const progress = (event: any) => {
+          const sessionID = event?.data?.sessionID
+          if (sessionID && timeout?.sessionID === sessionID) cancelTimeout()
+        }
+
+        onCleanup(
+          data.on("session.execution.started", (event) => {
+            beginExecution(event.data.sessionID)
+            armTimeout(event.data.sessionID)
+          }),
+        )
+        onCleanup(data.on("session.text.started", progress))
+        onCleanup(data.on("session.reasoning.started", progress))
+        onCleanup(data.on("session.step.started", progress))
+        onCleanup(data.on("session.tool.called", progress))
+        onCleanup(data.on("permission.asked", progress))
+        onCleanup(data.on("session.execution.interrupted", progress))
+        onCleanup(data.on("session.idle", progress))
+
+        onCleanup(
+          data.on("session.execution.succeeded", (event) => {
+            progress(event)
+            const sessionID = event.data.sessionID
+            attemptsBySession.delete(sessionID)
+            lastSetBySession.delete(sessionID)
+            executionBySession.delete(sessionID)
+            handledRetries.delete(sessionID)
+          }),
+        )
+
+        onCleanup(
+          data.on("session.execution.failed", (event) => {
+            progress(event)
+            onFailure(event.data.sessionID, event.data.error)
+          }),
+        )
+
+        onCleanup(
+          data.on("session.retry.scheduled", (event) => {
+            progress(event)
+            onRetryScheduled(event.data.sessionID, (event.data as any).error, (event.data as any).assistantMessageID)
+          }),
+        )
+
+        onCleanup(
+          data.on("session.model.selected", (event) => {
+            const { sessionID, model } = event.data as any
+            if (!model?.providerID || !model?.id) return
+            const selected = { providerID: model.providerID, modelID: model.id }
+            modelBySession.set(sessionID, selected)
+            // A model change makes the old first-token watchdog meaningless.
+            if (timeout?.sessionID === sessionID) cancelTimeout()
+
+            // A running execution still belongs to the model it started on. Do not
+            // let its failures be blamed on the freshly selected model.
+            const execution = executionBySession.get(sessionID)
+            if (execution && execution.model && !sameModel(execution.model, selected)) {
+              execution.switched = true
+            }
+          }),
+        )
+
+        onCleanup(cancelTimeout)
+      },
+    )
+  },
+})

@@ -1,0 +1,4 @@
+node_modules/
+test/.bundle.cjs
+*.log
+.DS_Store

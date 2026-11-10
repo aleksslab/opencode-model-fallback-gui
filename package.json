@@ -1,0 +1,48 @@
+{
+  "name": "opencode-model-fallback-gui",
+  "version": "2.0.1",
+  "description": "GUI plugin for OpenCode Desktop that switches to the next model when the active one fails.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./gui-experimental": "./dist/gui-experimental.cjs"
+  },
+  "files": [
+    "dist",
+    "index.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "vite build",
+    "watch": "vite build --watch",
+    "test": "bun test/prepare.mjs && bun --conditions=browser test/engine.mjs"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "plugin",
+    "fallback",
+    "model-switching",
+    "gui"
+  ],
+  "license": "SEE LICENSE IN LICENSE",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aleksslab/opencode-model-fallback-gui.git"
+  },
+  "homepage": "https://github.com/aleksslab/opencode-model-fallback-gui#readme",
+  "bugs": {
+    "url": "https://github.com/aleksslab/opencode-model-fallback-gui/issues"
+  },
+  "dependencies": {
+    "@opencode/plugin": "2.2.6",
+    "effect": "4.1.0"
+  },
+  "devDependencies": {
+    "solid-js": "^1.9.0",
+    "vite": "^7.0.0",
+    "vite-plugin-solid": "^2.11.0"
+  }
+}
