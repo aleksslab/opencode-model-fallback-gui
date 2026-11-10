@@ -1,6 +1,6 @@
 {
   "name": "opencode-model-fallback-gui",
-  "version": "2.1.2",
+  "version": "2.1.3",
   "description": "GUI plugin for OpenCode Desktop that switches to the next model when the active one fails.",
   "type": "module",
   "main": "index.js",

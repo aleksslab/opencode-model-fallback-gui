@@ -1441,12 +1441,18 @@ export default Plugin.define({
       )
     }
 
-    ctx.add(Slot, {
-      at: "session.header",
-      order: 10,
-      render: (input) => (
-        <FallbackBadge sessionID={input.session.id} compact={input.compact} active={input.active} />
-      ),
-    })
+    try {
+      ctx.add(Slot, {
+        at: "session.header",
+        order: 10,
+        render: (input) => (
+          <FallbackBadge sessionID={input.session.id} compact={input.compact} active={input.active} />
+        ),
+      })
+    } catch (cause) {
+      // Older desktop builds may not expose this slot. The engine must keep
+      // working without the badge instead of failing the whole setup.
+      log("header badge unavailable", String(cause))
+    }
   },
 })

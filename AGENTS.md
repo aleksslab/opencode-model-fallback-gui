@@ -37,10 +37,18 @@ Do not move them back into `dependencies`: at runtime they resolve from the
 app's module map, and listing them as production dependencies made every Git
 install download the whole OpenCode SDK (hundreds of packages) for nothing.
 
-The plugin targets the installed desktop **2.2.5**, where some newer settings
-components do not exist. `src/gui.tsx` therefore checks `ui.SettingsLayout`,
+The plugin is tested on desktop **2.2.5** and **2.2.6**. The GUI API is
+experimental and may change between releases, so treat 2.2.5 as the known-good
+baseline rather than a hard cutoff: on older 2.2.x builds the engine usually
+still switches models, but the header badge or `ctx.dialogs.confirm` can be
+missing. `src/gui.tsx` therefore checks `ui.SettingsLayout`,
 `ui.SettingsSection` and `ui.SettingsRow` at setup time and falls back to the
-inline-styled cards. Keep that fallback working.
+inline-styled cards, guards `ctx.dialogs.confirm` / `alert`, and wraps the
+`session.header` slot registration in `try/catch`. Keep those fallbacks working.
+
+This file is for agents working inside the repository. It is not installation
+documentation: an agent that runs `opencode plugin add` on another machine never
+opens it. Install guidance, including a ready-made prompt, lives in `README.md`.
 
 ## Persisted config
 
@@ -153,7 +161,9 @@ Invariants:
   sends the resume prompt even on the `session.retry.scheduled` path.
 - The header badge (`session.header` slot) is per session and in memory. A manual
   `session.model.selected` for a different model clears it; the automatic
-  `session.model.selected` emitted by the switch itself must not.
+  `session.model.selected` emitted by the switch itself must not. Its
+  registration is guarded: a build without this slot logs
+  `header badge unavailable` and keeps the engine running.
 - Never switch to a marked model without a confirmation. On a build without
   `ctx.dialogs.confirm`, skip marked targets instead of spending silently.
 
@@ -200,7 +210,7 @@ the 2.2.5 shape. The published tests do not require a DOM.
    `opencode-model-fallback-gui`, while the plugin id stays
    `local-model-fallback`.
 7. Bump `version`, commit, and tag the release
-   (`git tag v2.1.2 && git push --tags`). The plugin is distributed through Git,
+   (`git tag v2.1.3 && git push --tags`). The plugin is distributed through Git,
    not npm.
 8. Git installs (`opencode plugin add github:aleksslab/opencode-model-fallback-gui`)
    use the committed `dist`; rebuild and commit before tagging.

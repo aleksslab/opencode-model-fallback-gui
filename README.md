@@ -31,9 +31,15 @@ config file.
 ## Requirements
 
 - OpenCode Desktop **2.2.5 or newer** (V2 GUI plugins and the
-  `gui-experimental` package export).
+  `gui-experimental` package export). Tested on 2.2.5 and 2.2.6.
 - At least two models already configured and connected in OpenCode.
 - [Bun](https://bun.sh) and [Vite](https://vite.dev) only if you build from source.
+
+The GUI plugin API is marked experimental and may change between desktop
+releases. On older 2.2.x builds the plugin normally still switches models, but
+the header badge or the paid-model confirmation can be missing. On a build
+without `ctx.dialogs.confirm`, models marked **Ask first** are skipped instead of
+switched silently.
 
 ## Install
 
@@ -60,12 +66,28 @@ Or add the package to `plugins` in the global `opencode.json(c)`:
 Pin a tag or a commit when you need a stable snapshot:
 
 ```jsonc
-"plugins": ["github:aleksslab/opencode-model-fallback-gui#v2.1.2"]
+"plugins": ["github:aleksslab/opencode-model-fallback-gui#v2.1.3"]
 ```
 
 Updates are not applied silently to unpinned Git packages; run
 `opencode plugin update` to replace the installed copy. The package is not
 published to npm.
+
+### Let an agent install it
+
+An agent that installs the plugin from outside this repository never sees
+`AGENTS.md`, and the plugin ships with an empty chain. Give it this task
+instead of "connect my plugin":
+
+> Install the OpenCode plugin `github:aleksslab/opencode-model-fallback-gui#v2.1.3`
+> with `opencode plugin add` into the **global** `~/.config/opencode/opencode.json(c)`.
+> Never put it in a project config, and do not change any other key there.
+> Then run `opencode plugin list`, show me the lines you changed, and remind me to
+> restart OpenCode Desktop. Leave the fallback chain empty: I will fill it in
+> **Settings → Model fallback** myself.
+
+If `opencode` is not on the PATH, add the entry to the global config by hand
+(the snippet above) instead; the app installs and loads it on the next start.
 
 ### From a local checkout
 
