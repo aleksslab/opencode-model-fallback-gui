@@ -70,6 +70,24 @@ stores values in the app's local storage under `plugin.local-model-fallback.conf
 - Treat schema changes as additive. Renaming or removing a key breaks existing
   installations.
 
+## Settings UI
+
+- Chain rows are `Ui.SettingsRow`s. The host lays out `settings-row-control` with
+  `align-items: stretch`, and `IconButton`s have a fixed 24 px height, so they
+  otherwise sit at the top of a 28 px input. Wrap every icon button in a row in
+  `Center` (`display: flex; align-items: center; align-self: center`); `fieldStyle`
+  carries `align-self: center` for the same reason. Keep both when adding rows.
+- The picker uses `ctx.dialogs.select`. It reads the live catalog through
+  `catalogFor(pickSource())`, groups options by provider, and writes the canonical
+  `provider/model-id`, never the typed text. Without `ctx.dialogs.select` the
+  picker buttons are hidden and manual input stays; picking must never be
+  required.
+- A picked model is marked **Ask first** when `isPaidModel()` finds a positive
+  `cost` (an object or an array of tiers). When the catalog reports no price,
+  marking is a silent no-op: do not guess.
+- `addCurrentModel` only appends `composer.model()` to the chain; it must not
+  switch the session or touch `lastSetBySession`.
+
 ## Event contract (desktop 2.2.5)
 
 The engine subscribes to `ctx.servers.get("sidecar")?.data` inside `createKeyed`,
@@ -210,7 +228,7 @@ the 2.2.5 shape. The published tests do not require a DOM.
    `opencode-model-fallback-gui`, while the plugin id stays
    `local-model-fallback`.
 7. Bump `version`, commit, and tag the release
-   (`git tag v2.1.3 && git push --tags`). The plugin is distributed through Git,
+   (`git tag v2.2.0 && git push --tags`). The plugin is distributed through Git,
    not npm.
 8. Git installs (`opencode plugin add github:aleksslab/opencode-model-fallback-gui`)
    use the committed `dist`; rebuild and commit before tagging.

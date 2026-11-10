@@ -90,9 +90,19 @@ const definition = Plugin.define({
       autoRetry: "Auto-resume",
       autoRetryDescription: "Send the resume prompt after switching so the answer continues.",
       modelsDescription:
-        "Tried top to bottom. Each entry is provider/model-id. Case is ignored, and entries no connected provider offers are skipped. Turn on \"Ask first\" for paid models.",
+        "Tried top to bottom. Each entry is provider/model-id. Case is ignored, and entries no connected provider offers are skipped. Turn on \"Ask first\" for paid models. The search button picks a model from the catalog.",
       modelN: "Model {{n}}",
       addModel: "Add model",
+      pickModel: "Pick a model",
+      pickModelTitle: "Choose a model",
+      pickModelPlaceholder: "Search models",
+      pickModelEmpty: "The model catalog is empty. Connect a provider or type the id manually.",
+      pickModelUnavailable: "Picking models is unavailable in this OpenCode version.",
+      modelPaid: "paid",
+      addCurrent: "Add current model",
+      currentMissing: "No model is selected in the current session.",
+      alreadyInChain: "That model is already in the chain.",
+      markedPaid: "Marked as Ask first: the catalog reports a price for this model.",
       confirmShort: "Ask first",
       confirmSwitch: "Ask first",
       confirmSwitchDescription:
@@ -156,9 +166,19 @@ const definition = Plugin.define({
       autoRetry: "Автопродолжение",
       autoRetryDescription: "Отправлять текст продолжения после переключения, чтобы ответ не оборвался.",
       modelsDescription:
-        "Пробуются сверху вниз. Формат: provider/model-id. Регистр не важен, недоступные у провайдеров записи пропускаются. Включите «Спрашивать» для платных моделей.",
+        "Пробуются сверху вниз. Формат: provider/model-id. Регистр не важен, недоступные у провайдеров записи пропускаются. Включите «Спрашивать» для платных моделей. Кнопка поиска выбирает модель из каталога.",
       modelN: "Модель {{n}}",
       addModel: "Добавить модель",
+      pickModel: "Выбрать модель",
+      pickModelTitle: "Выберите модель",
+      pickModelPlaceholder: "Поиск моделей",
+      pickModelEmpty: "Каталог моделей пуст. Подключите провайдера или введите id вручную.",
+      pickModelUnavailable: "Выбор моделей недоступен в этой версии OpenCode.",
+      modelPaid: "платная",
+      addCurrent: "Добавить текущую",
+      currentMissing: "В текущей сессии модель не выбрана.",
+      alreadyInChain: "Эта модель уже есть в цепочке.",
+      markedPaid: "Отмечено «Спрашивать»: у модели указана цена.",
       confirmShort: "Спрашивать",
       confirmSwitch: "Спрашивать",
       confirmSwitchDescription:
@@ -269,10 +289,26 @@ function splitModel(path: string) {
   return { providerID: trimmed.slice(0, slash), modelID: trimmed.slice(slash + 1) }
 }
 
-type Model = { providerID: string; modelID: string }
+type Model = { providerID: string; modelID: string; name?: string; paid?: boolean }
 
 function modelPath(model: Model) {
   return `${model.providerID}/${model.modelID}`
+}
+
+/** Display name for a model, falling back to its id. */
+function modelLabel(model: Model) {
+  const name = model.name?.trim()
+  return name ? name : model.modelID
+}
+
+/** Whether the catalog reports a price for this model. */
+function isPaidModel(model: any) {
+  if (model?.paid === true) return true
+  const cost = model?.cost
+  if (Array.isArray(cost)) return cost.some((tier) => isPaidModel({ cost: tier }))
+  if (!cost || typeof cost !== "object") return false
+  const values = [cost.input, cost.output, cost.cache?.read, cost.cache?.write]
+  return values.some((value) => typeof value === "number" && value > 0)
 }
 
 /** Provider and model ids compare case-insensitively, as providers spell them inconsistently. */
@@ -350,6 +386,8 @@ function readLocation(server: any, location: any) {
   const models: Model[] = (store?.model?.list?.(location) ?? []).map((model: any) => ({
     providerID: String(model.providerID),
     modelID: String(model.modelID),
+    name: typeof model.name === "string" ? model.name : typeof model.title === "string" ? model.title : undefined,
+    paid: isPaidModel(model),
   }))
   const providers: string[] = (store?.provider?.list?.(location) ?? []).map((provider: any) => String(provider.id))
   return { models, providers }
@@ -438,7 +476,19 @@ const clusterStyle = {
 const fieldStyle = {
   width: "300px",
   "max-width": "100%",
+  // The host row aligns its children to the top; center every control against
+  // the tallest one so buttons line up with the input box, not its top edge.
+  "align-self": "center",
 }
+
+const centerStyle = {
+  display: "flex",
+  "align-items": "center",
+  "align-self": "center",
+}
+
+/** Vertical centering wrapper for controls the host lays out top-aligned. */
+const Center = (props: any) => <div style={centerStyle}>{props.children}</div>
 
 /* ------------------------------------------------------------------------- */
 /* GUI plugin                                                                 */
@@ -575,6 +625,91 @@ export default Plugin.define({
       })
     }
 
+    /* ------------------------------ model picker ------------------------------ */
+
+    const canPickModels = () => typeof (ctx.dialogs as any)?.select === "function"
+
+    /** The server and location to read the model catalog from. */
+    const pickSource = () => {
+      const session = ctx.sessions.current()
+      if (session?.server) return { server: session.server, location: session.location }
+      const server = ctx.servers.get("sidecar")
+      return server ? { server, location: undefined } : undefined
+    }
+
+    const toast = (description: string, variant: "success" | "error" = "error") => {
+      ctx.toast.show({ variant, title: ctx.t("pickModel"), description, duration: 5000 })
+    }
+
+    /** Replace a chain row with a model picked from the live catalog. */
+    const pickModel = async (index: number) => {
+      const select = (ctx.dialogs as any)?.select
+      const source = pickSource()
+      if (typeof select !== "function" || !source) {
+        toast(ctx.t("pickModelUnavailable"))
+        return
+      }
+
+      const catalog = await catalogFor(source.server, source.location)
+      if (!catalog.available || catalog.models.length === 0) {
+        toast(ctx.t("pickModelEmpty"))
+        return
+      }
+
+      const unique = new Map<string, Model>()
+      for (const model of catalog.models) unique.set(modelPath(model), model)
+
+      const options = [...unique.values()].map((model) => ({
+        title: modelLabel(model),
+        description: model.paid ? `${modelPath(model)} · ${ctx.t("modelPaid")}` : modelPath(model),
+        group: model.providerID,
+        value: modelPath(model),
+      }))
+
+      const current = config().models[index]?.trim()
+      const picked = await select.call(ctx.dialogs, {
+        title: ctx.t("pickModelTitle"),
+        placeholder: ctx.t("pickModelPlaceholder"),
+        options,
+        current: current && options.some((option) => option.value === current) ? current : undefined,
+      })
+      if (typeof picked !== "string" || !picked) return
+
+      const model = unique.get(picked)
+      const before = normalize(config().models[index] ?? "")
+      edit((draft) => {
+        if (before) {
+          const mark = draft.confirmModels.findIndex((entry) => normalize(entry) === before)
+          if (mark !== -1) draft.confirmModels.splice(mark, 1)
+        }
+        draft.models[index] = picked
+      })
+
+      if (model?.paid) {
+        setConfirmMark(picked, true)
+        toast(ctx.t("markedPaid"), "success")
+      }
+    }
+
+    /** Append the model the routed session is sending prompts with. */
+    const addCurrentModel = () => {
+      const session = ctx.sessions.current()
+      const composer = session ? ctx.screen.current()?.composer : undefined
+      const live = composer?.model()
+      if (!live) {
+        toast(ctx.t("currentMissing"))
+        return
+      }
+
+      const path = modelPath(live)
+      if (config().models.some((entry) => normalize(entry) === normalize(path))) {
+        toast(ctx.t("alreadyInChain"), "success")
+        return
+      }
+
+      edit((draft) => draft.models.push(path))
+    }
+
     /* -------------------------------- settings -------------------------------- */
 
     const Settings = () => {
@@ -659,15 +794,17 @@ export default Plugin.define({
                       }
                     />
                   </div>
-                  <ui.IconButton
-                    icon="trash"
-                    label={ctx.t("remove")}
-                    onClick={() =>
-                      edit((draft) => {
-                        draft.patterns.splice(index, 1)
-                      })
-                    }
-                  />
+                  <Center>
+                    <ui.IconButton
+                      icon="trash"
+                      label={ctx.t("remove")}
+                      onClick={() =>
+                        edit((draft) => {
+                          draft.patterns.splice(index, 1)
+                        })
+                      }
+                    />
+                  </Center>
                 </Row>
               )}
             </Index>
@@ -729,10 +866,20 @@ export default Plugin.define({
                       }
                     />
                   </div>
+                  <Show when={canPickModels()}>
+                    <Center>
+                      <ui.IconButton
+                        icon="magnifying-glass"
+                        label={ctx.t("pickModel")}
+                        onClick={() => void pickModel(index)}
+                      />
+                    </Center>
+                  </Show>
                   <div
                     style={{
                       display: "flex",
                       "align-items": "center",
+                      "align-self": "center",
                       gap: "6px",
                       "font-size": "12px",
                       opacity: model().trim() ? 0.8 : 0.4,
@@ -747,41 +894,47 @@ export default Plugin.define({
                       onChange={(checked) => setConfirmMark(model(), checked)}
                     />
                   </div>
-                  <ui.IconButton
-                    icon="arrow-up"
-                    label={ctx.t("moveUp")}
-                    disabled={index === 0}
-                    onClick={() =>
-                      edit((draft) => {
-                        const [item] = draft.models.splice(index, 1)
-                        draft.models.splice(index - 1, 0, item)
-                      })
-                    }
-                  />
-                  <ui.IconButton
-                    icon="arrow-down-to-line"
-                    label={ctx.t("moveDown")}
-                    disabled={index === config().models.length - 1}
-                    onClick={() =>
-                      edit((draft) => {
-                        const [item] = draft.models.splice(index, 1)
-                        draft.models.splice(index + 1, 0, item)
-                      })
-                    }
-                  />
-                  <ui.IconButton
-                    icon="trash"
-                    label={ctx.t("remove")}
-                    onClick={() =>
-                      edit((draft) => {
-                        const removed = normalize(draft.models[index])
-                        draft.models.splice(index, 1)
-                        if (!removed) return
-                        const mark = draft.confirmModels.findIndex((entry) => normalize(entry) === removed)
-                        if (mark !== -1) draft.confirmModels.splice(mark, 1)
-                      })
-                    }
-                  />
+                  <Center>
+                    <ui.IconButton
+                      icon="arrow-up"
+                      label={ctx.t("moveUp")}
+                      disabled={index === 0}
+                      onClick={() =>
+                        edit((draft) => {
+                          const [item] = draft.models.splice(index, 1)
+                          draft.models.splice(index - 1, 0, item)
+                        })
+                      }
+                    />
+                  </Center>
+                  <Center>
+                    <ui.IconButton
+                      icon="arrow-down-to-line"
+                      label={ctx.t("moveDown")}
+                      disabled={index === config().models.length - 1}
+                      onClick={() =>
+                        edit((draft) => {
+                          const [item] = draft.models.splice(index, 1)
+                          draft.models.splice(index + 1, 0, item)
+                        })
+                      }
+                    />
+                  </Center>
+                  <Center>
+                    <ui.IconButton
+                      icon="trash"
+                      label={ctx.t("remove")}
+                      onClick={() =>
+                        edit((draft) => {
+                          const removed = normalize(draft.models[index])
+                          draft.models.splice(index, 1)
+                          if (!removed) return
+                          const mark = draft.confirmModels.findIndex((entry) => normalize(entry) === removed)
+                          if (mark !== -1) draft.confirmModels.splice(mark, 1)
+                        })
+                      }
+                    />
+                  </Center>
                 </Row>
               )}
             </Index>
@@ -790,6 +943,11 @@ export default Plugin.define({
               <ui.Button icon="plus" size="small" onClick={() => edit((draft) => draft.models.push(""))}>
                 {ctx.t("addModel")}
               </ui.Button>
+              <Show when={canPickModels()}>
+                <ui.Button icon="models" size="small" onClick={addCurrentModel}>
+                  {ctx.t("addCurrent")}
+                </ui.Button>
+              </Show>
             </Row>
           </Section>
 

@@ -22,6 +22,12 @@ config file.
 - **Paid-model guard**: mark any chain entry with **Ask first**. Before switching
   to it, the plugin interrupts the running turn and asks for confirmation. If you
   decline, it keeps looking for the next unmarked (free) model instead.
+- **Model picker**: the magnifier in each chain row opens a searchable list of
+  every model the connected providers offer, grouped by provider. Picking one
+  writes the canonical `provider/model-id` and marks the row **Ask first**
+  automatically when the catalog reports a price. **Add current model** appends
+  whatever the open session is sending with. Manual typing stays available for
+  models from disconnected providers.
 - **Header badge** showing the last automatic switch: which model failed, which
   one took over, the reason, and when. It clears when you pick a model yourself.
 - **Toasts** for switches and for exhausted chains.
@@ -39,7 +45,8 @@ The GUI plugin API is marked experimental and may change between desktop
 releases. On older 2.2.x builds the plugin normally still switches models, but
 the header badge or the paid-model confirmation can be missing. On a build
 without `ctx.dialogs.confirm`, models marked **Ask first** are skipped instead of
-switched silently.
+switched silently. Without `ctx.dialogs.select`, the model picker is hidden and
+chain entries are typed by hand.
 
 ## Install
 
@@ -66,7 +73,7 @@ Or add the package to `plugins` in the global `opencode.json(c)`:
 Pin a tag or a commit when you need a stable snapshot:
 
 ```jsonc
-"plugins": ["github:aleksslab/opencode-model-fallback-gui#v2.1.3"]
+"plugins": ["github:aleksslab/opencode-model-fallback-gui#v2.2.0"]
 ```
 
 Updates are not applied silently to unpinned Git packages; run
@@ -79,7 +86,7 @@ An agent that installs the plugin from outside this repository never sees
 `AGENTS.md`, and the plugin ships with an empty chain. Give it this task
 instead of "connect my plugin":
 
-> Install the OpenCode plugin `github:aleksslab/opencode-model-fallback-gui#v2.1.3`
+> Install the OpenCode plugin `github:aleksslab/opencode-model-fallback-gui#v2.2.0`
 > with `opencode plugin add` into the **global** `~/.config/opencode/opencode.json(c)`.
 > Never put it in a project config, and do not change any other key there.
 > Then run `opencode plugin list`, show me the lines you changed, and remind me to
@@ -159,6 +166,16 @@ other-provider/model-c
   the confirmation, the marked rows are skipped for that attempt and the plugin
   continues to the next unmarked model. If none is left, the turn stops instead
   of switching.
+
+The magnifier on a row opens **Pick a model**: a searchable list of every model
+the connected providers offer, grouped by provider, with the canonical
+`provider/model-id` under each name. Picking one replaces the row's text with the
+catalog id, so it always matches the provider's real casing. If the catalog
+reports a price for the picked model, the row is marked **Ask first**
+automatically. **Add current model**, next to **Add model**, appends the model the
+open session is currently sending prompts with. Manual typing remains available
+for models whose provider is disconnected, and the picker is hidden on desktop
+builds without `ctx.dialogs.select`.
 
 The **Ask first** mark follows the row when you edit or move it, and is removed
 with the row.
