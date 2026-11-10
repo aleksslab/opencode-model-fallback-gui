@@ -30,6 +30,13 @@ the app's own module map. The bundle may only require:
 
 Adding any other runtime import breaks loading in the app.
 
+Because the app supplies all four modules, the package has no runtime
+`dependencies`: `@opencode/plugin`, `effect`, `solid-js`, `vite` and
+`vite-plugin-solid` are `devDependencies` used only by the build and the tests.
+Do not move them back into `dependencies`: at runtime they resolve from the
+app's module map, and listing them as production dependencies made every Git
+install download the whole OpenCode SDK (hundreds of packages) for nothing.
+
 The plugin targets the installed desktop **2.2.5**, where some newer settings
 components do not exist. `src/gui.tsx` therefore checks `ui.SettingsLayout`,
 `ui.SettingsSection` and `ui.SettingsRow` at setup time and falls back to the
@@ -193,7 +200,7 @@ the 2.2.5 shape. The published tests do not require a DOM.
    `opencode-model-fallback-gui`, while the plugin id stays
    `local-model-fallback`.
 7. Bump `version`, commit, and tag the release
-   (`git tag v2.1.1 && git push --tags`). The plugin is distributed through Git,
+   (`git tag v2.1.2 && git push --tags`). The plugin is distributed through Git,
    not npm.
 8. Git installs (`opencode plugin add github:aleksslab/opencode-model-fallback-gui`)
    use the committed `dist`; rebuild and commit before tagging.
