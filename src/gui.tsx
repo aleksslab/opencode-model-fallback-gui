@@ -1,6 +1,6 @@
-import { Index, onCleanup } from "solid-js"
+import { Index, Show, createSignal, onCleanup } from "solid-js"
 import { Schema } from "effect"
-import { Plugin, Store, SettingsPage, createKeyed } from "@opencode/plugin/gui"
+import { Plugin, Store, SettingsPage, Slot, createKeyed } from "@opencode/plugin/gui"
 
 /* ------------------------------------------------------------------------- */
 /* Config                                                                     */
@@ -18,9 +18,24 @@ const DEFAULTS = {
   timeoutSeconds: "120",
   triggerText: "Continue",
   models: [],
+  confirmModels: [],
 }
 
-type Config = typeof DEFAULTS
+type Config = {
+  enabled: boolean
+  notifyOnFallback: boolean
+  autoRetry: boolean
+  fallbackOnAnyError: boolean
+  retryCodes: string
+  patterns: string[]
+  maxAttempts: string
+  cooldownSeconds: string
+  timeoutSeconds: string
+  triggerText: string
+  models: string[]
+  /** Chain entries that require a confirmation before switching to them. */
+  confirmModels: string[]
+}
 
 const ConfigSchema = Schema.Struct({
   enabled: Schema.Boolean,
@@ -34,6 +49,7 @@ const ConfigSchema = Schema.Struct({
   timeoutSeconds: Schema.String,
   triggerText: Schema.String,
   models: Schema.Array(Schema.String),
+  confirmModels: Schema.Array(Schema.String),
 })
 
 const definition = Plugin.define({
@@ -74,9 +90,23 @@ const definition = Plugin.define({
       autoRetry: "Auto-resume",
       autoRetryDescription: "Send the resume prompt after switching so the answer continues.",
       modelsDescription:
-        "Tried top to bottom. Each entry is provider/model-id. Case is ignored, and entries no connected provider offers are skipped.",
+        "Tried top to bottom. Each entry is provider/model-id. Case is ignored, and entries no connected provider offers are skipped. Turn on \"Ask first\" for paid models.",
       modelN: "Model {{n}}",
       addModel: "Add model",
+      confirmShort: "Ask first",
+      confirmSwitch: "Ask first",
+      confirmSwitchDescription:
+        "Show a confirmation before switching to this model. Use it for paid models so a fallback cannot spend money silently.",
+      confirmTitle: "Switch to a paid model?",
+      confirmBody: "{{from}} failed ({{reason}}). Switch to {{model}}? It may incur charges.",
+      confirmAction: "Switch",
+      confirmCancel: "Cancel",
+      declinedBody: "Paid models were skipped: no free model is left in the chain.",
+      confirmUnavailable: "Confirmation is unavailable in this OpenCode version, so paid models were skipped.",
+      badge: "Fallback",
+      badgeTitle: "Last fallback switch",
+      badgeDetails: "From {{from}} to {{to}}. Reason: {{reason}}.",
+      badgeAria: "Show the last fallback switch",
       reset: "Reset to defaults",
       moveUp: "Move up",
       moveDown: "Move down",
@@ -126,9 +156,23 @@ const definition = Plugin.define({
       autoRetry: "Автопродолжение",
       autoRetryDescription: "Отправлять текст продолжения после переключения, чтобы ответ не оборвался.",
       modelsDescription:
-        "Пробуются сверху вниз. Формат: provider/model-id. Регистр не важен, недоступные у провайдеров записи пропускаются.",
+        "Пробуются сверху вниз. Формат: provider/model-id. Регистр не важен, недоступные у провайдеров записи пропускаются. Включите «Спрашивать» для платных моделей.",
       modelN: "Модель {{n}}",
       addModel: "Добавить модель",
+      confirmShort: "Спрашивать",
+      confirmSwitch: "Спрашивать",
+      confirmSwitchDescription:
+        "Показывать подтверждение перед переключением на эту модель. Используйте для платных моделей, чтобы fallback не тратил деньги молча.",
+      confirmTitle: "Переключиться на платную модель?",
+      confirmBody: "{{from}} не сработала ({{reason}}). Переключиться на {{model}}? Это может стоить денег.",
+      confirmAction: "Переключиться",
+      confirmCancel: "Отмена",
+      declinedBody: "Платные модели пропущены: бесплатных в цепочке больше нет.",
+      confirmUnavailable: "Подтверждение недоступно в этой версии OpenCode, поэтому платные модели пропущены.",
+      badge: "Резерв",
+      badgeTitle: "Последнее переключение",
+      badgeDetails: "С {{from}} на {{to}}. Причина: {{reason}}.",
+      badgeAria: "Показать последнее переключение",
       reset: "Сбросить настройки",
       moveUp: "Выше",
       moveDown: "Ниже",
@@ -249,6 +293,19 @@ function sameModel(a: Model, b: Model) {
 /** Stable key for cooldown and attempt bookkeeping. */
 function modelKey(model: Model) {
   return `${normalize(model.providerID)}/${normalize(model.modelID)}`
+}
+
+/** Whether switching to this target needs the user's confirmation first. */
+function needsConfirmation(entry: string, target: Model, config: Config) {
+  if (config.confirmModels.length === 0) return false
+  const path = modelPath(target)
+  return config.confirmModels.some((value) => {
+    const key = value.trim()
+    if (!key) return false
+    if (normalize(key) === normalize(entry) || normalize(key) === normalize(path)) return true
+    const parsed = splitModel(key)
+    return parsed ? sameModel(parsed, target) : false
+  })
 }
 
 /** Match a chain entry against a live model, tolerating case and provider-prefixed model ids. */
@@ -498,6 +555,23 @@ export default Plugin.define({
         ...DEFAULTS,
         patterns: [...DEFAULTS.patterns],
         models: [...DEFAULTS.models],
+        confirmModels: [...DEFAULTS.confirmModels],
+      })
+    }
+
+    /** Marks follow the chain entry text, so editing or removing a row also moves its mark. */
+    const isConfirmMarked = (entry: string) => {
+      const key = normalize(entry)
+      return key.length > 0 && config().confirmModels.some((value) => normalize(value) === key)
+    }
+
+    const setConfirmMark = (entry: string, marked: boolean) => {
+      const key = normalize(entry)
+      if (!key) return
+      edit((draft) => {
+        const index = draft.confirmModels.findIndex((value) => normalize(value) === key)
+        if (marked && index === -1) draft.confirmModels.push(entry.trim())
+        if (!marked && index !== -1) draft.confirmModels.splice(index, 1)
       })
     }
 
@@ -642,9 +716,35 @@ export default Plugin.define({
                       placeholder="provider/model-id"
                       onInput={(value) =>
                         edit((draft) => {
+                          const before = normalize(draft.models[index])
+                          if (before) {
+                            const mark = draft.confirmModels.findIndex((entry) => normalize(entry) === before)
+                            if (mark !== -1) {
+                              if (value.trim()) draft.confirmModels[mark] = value.trim()
+                              else draft.confirmModels.splice(mark, 1)
+                            }
+                          }
                           draft.models[index] = value
                         })
                       }
+                    />
+                  </div>
+                  <div
+                    style={{
+                      display: "flex",
+                      "align-items": "center",
+                      gap: "6px",
+                      "font-size": "12px",
+                      opacity: model().trim() ? 0.8 : 0.4,
+                    }}
+                  >
+                    <span>{ctx.t("confirmShort")}</span>
+                    <ui.Switch
+                      label={ctx.t("confirmSwitch")}
+                      hideLabel
+                      checked={isConfirmMarked(model())}
+                      disabled={!model().trim()}
+                      onChange={(checked) => setConfirmMark(model(), checked)}
                     />
                   </div>
                   <ui.IconButton
@@ -674,7 +774,11 @@ export default Plugin.define({
                     label={ctx.t("remove")}
                     onClick={() =>
                       edit((draft) => {
+                        const removed = normalize(draft.models[index])
                         draft.models.splice(index, 1)
+                        if (!removed) return
+                        const mark = draft.confirmModels.findIndex((entry) => normalize(entry) === removed)
+                        if (mark !== -1) draft.confirmModels.splice(mark, 1)
                       })
                     }
                   />
@@ -741,6 +845,26 @@ export default Plugin.define({
       switched: boolean
       /** Set once a resume prompt was sent for this execution. */
       resumed: boolean
+      /** The user declined a paid switch; ignore the rest of this execution. */
+      stopped: boolean
+    }
+
+    /** What the header badge shows for a session after an automatic switch. */
+    type LastSwitch = { from: string; to: string; reason: string; at: number }
+
+    const [lastSwitch, setLastSwitch] = createSignal<Record<string, LastSwitch | undefined>>({})
+
+    const rememberSwitch = (sessionID: string, value: LastSwitch) => {
+      setLastSwitch((previous) => ({ ...previous, [sessionID]: value }))
+    }
+
+    const forgetSwitch = (sessionID: string) => {
+      setLastSwitch((previous) => {
+        if (!previous[sessionID]) return previous
+        const next = { ...previous }
+        delete next[sessionID]
+        return next
+      })
     }
 
     const executionBySession = new Map<string, Execution>()
@@ -787,14 +911,14 @@ export default Plugin.define({
     const executionFor = (sessionID: string): Execution => {
       const existing = executionBySession.get(sessionID)
       if (existing) return existing
-      const created: Execution = { model: currentModel(sessionID), switched: false, resumed: false }
+      const created: Execution = { model: currentModel(sessionID), switched: false, resumed: false, stopped: false }
       executionBySession.set(sessionID, created)
       return created
     }
 
     /** A new execution starts on whatever model is selected right now. */
     const beginExecution = (sessionID: string) => {
-      const created: Execution = { model: currentModel(sessionID), switched: false, resumed: false }
+      const created: Execution = { model: currentModel(sessionID), switched: false, resumed: false, stopped: false }
       executionBySession.set(sessionID, created)
       log("execution started", sessionID, created.model ? modelPath(created.model) : "unknown model")
     }
@@ -861,6 +985,7 @@ export default Plugin.define({
       current: Model,
       reason: string,
       options: { interrupt?: boolean; prompt?: boolean; cool?: boolean; coolForMs?: number },
+      execution?: Execution,
     ) => {
       const cfg = config()
       if (!cfg.enabled) return
@@ -869,6 +994,20 @@ export default Plugin.define({
       if (!session) return
 
       log("switch", sessionID, "from", modelPath(current), "reason:", reason)
+
+      // A confirmation dialog leaves the execution running, and a scheduled retry
+      // may fire on the old model. Stop it before asking, so nothing spends while
+      // the user decides; an approved switch then resumes the turn.
+      let interrupted = false
+      const interruptNow = async () => {
+        if (interrupted) return
+        interrupted = true
+        try {
+          await session.server.client.session.interrupt({ sessionID })
+        } catch {
+          // The execution may already be over; nothing to stop.
+        }
+      }
 
       // The user picked another model since our last switch: this turn starts fresh.
       const lastSet = lastSetBySession.get(sessionID)
@@ -940,9 +1079,69 @@ export default Plugin.define({
       }
 
       const composer = routedSession(sessionID) ? ctx.screen.current()?.composer : undefined
+      const ask = (ctx.dialogs as any)?.confirm
+
+      // One decline also skips the other marked models in this attempt: the user
+      // asked for a free model, not for another prompt per paid entry.
+      let declined = false
+      let skippedMarked = 0
+      let unavailable = false
 
       let switched: Model | undefined
       for (const { entry, target } of targets) {
+        if (needsConfirmation(entry, target, cfg)) {
+          if (declined) {
+            log("skip declined", entry)
+            skippedMarked++
+            continue
+          }
+
+          if (typeof ask !== "function") {
+            log("confirmation unavailable", entry)
+            unavailable = true
+            declined = true
+            skippedMarked++
+            continue
+          }
+
+          await interruptNow()
+          // The interrupted execution must not resume itself while the dialog waits.
+          if (execution) execution.resumed = true
+
+          const details = ctx.t("confirmBody", {
+            from: modelPath(current),
+            reason,
+            model: modelPath(target),
+          })
+
+          let approved = false
+          try {
+            approved = await ask.call(ctx.dialogs, {
+              title: ctx.t("confirmTitle"),
+              description: details,
+              confirm: ctx.t("confirmAction"),
+              cancel: ctx.t("confirmCancel"),
+              danger: true,
+            })
+          } catch (cause) {
+            log("confirmation failed", entry, String(cause))
+          }
+
+          if (!approved) {
+            log("declined", entry)
+            declined = true
+            skippedMarked++
+            continue
+          }
+
+          // A new execution may have started while the dialog was open; its turn
+          // must not be switched by a decision about the old one.
+          if (execution && executionBySession.get(sessionID) !== execution) {
+            log("confirmation superseded", entry)
+            return
+          }
+        }
+
         // Persist the change on the server first. `composer.setModel` only updates
         // the UI; a prompt sent before the server knows the new model runs the old one.
         try {
@@ -965,7 +1164,13 @@ export default Plugin.define({
       }
 
       if (!switched) {
-        giveUp()
+        if (execution && (declined || unavailable)) execution.stopped = true
+        if (skippedMarked > 0) {
+          log("give up: declined", skippedMarked)
+          notify(ctx.t("exhaustedTitle"), ctx.t(unavailable ? "confirmUnavailable" : "declinedBody"), "error")
+        } else {
+          giveUp()
+        }
         return
       }
 
@@ -974,16 +1179,16 @@ export default Plugin.define({
       attemptsBySession.set(sessionID, used + 1)
       lastSetBySession.set(sessionID, modelKey(switched))
 
-      if (options.interrupt) {
-        try {
-          await session.server.client.session.interrupt({ sessionID })
-        } catch {
-          // The execution may already be over; nothing to stop.
-        }
-      }
+      if (options.interrupt || interrupted) await interruptNow()
 
-      if (cfg.autoRetry && options.prompt) await resume(sessionID)
+      if (cfg.autoRetry && (options.prompt || interrupted)) await resume(sessionID)
 
+      rememberSwitch(sessionID, {
+        from: modelPath(current),
+        to: modelPath(switched),
+        reason,
+        at: Date.now(),
+      })
       notify(ctx.t("switchedTitle"), ctx.t("switchedBody", { model: modelPath(switched), reason }), "success")
     }
 
@@ -994,12 +1199,17 @@ export default Plugin.define({
       const session = routedSession(sessionID)
       if (!session) return
 
-      const reason = matchError(error, cfg)
-      if (!reason) return
-
       // Attribute the failure to the model the execution started on. The composer
       // may already show a different model because of an earlier switch.
       const execution = executionFor(sessionID)
+      if (execution.stopped) {
+        log("ignore failure after a declined switch", sessionID)
+        return
+      }
+
+      const reason = matchError(error, cfg)
+      if (!reason) return
+
       const model = execution.model ?? currentModel(sessionID)
       if (!model) return
 
@@ -1019,10 +1229,16 @@ export default Plugin.define({
       execution.resumed = cfg.autoRetry
 
       log("failure", sessionID, modelPath(model), `(${reason})`)
-      void switchTo(sessionID, model, reason, {
-        prompt: cfg.autoRetry,
-        coolForMs: cooldownFor(error, cfg),
-      })
+      void switchTo(
+        sessionID,
+        model,
+        reason,
+        {
+          prompt: cfg.autoRetry,
+          coolForMs: cooldownFor(error, cfg),
+        },
+        execution,
+      )
     }
 
     const onRetryScheduled = (sessionID: string, error: any, messageID: unknown) => {
@@ -1041,6 +1257,12 @@ export default Plugin.define({
 
       const reason = matchError(error, cfg) ?? "retry scheduled"
       const execution = executionFor(sessionID)
+      if (execution.stopped) {
+        markRetryHandled(sessionID, messageID)
+        log("ignore retry after a declined switch", sessionID)
+        return
+      }
+
       const model = execution.model ?? currentModel(sessionID)
       if (!model) return
 
@@ -1056,7 +1278,7 @@ export default Plugin.define({
       log("retry scheduled", sessionID, modelPath(model), `(${reason})`)
       // The server retries on its own; only the model has to change. If the retry
       // still fails, `execution.failed` resumes the turn on the new model.
-      void switchTo(sessionID, model, reason, { coolForMs: cooldownFor(error, cfg) })
+      void switchTo(sessionID, model, reason, { coolForMs: cooldownFor(error, cfg) }, execution)
     }
 
     const armTimeout = (sessionID: string) => {
@@ -1078,7 +1300,7 @@ export default Plugin.define({
           if (!routedSession(sessionID)) return
 
           const execution = executionFor(sessionID)
-          if (execution.switched) return
+          if (execution.switched || execution.stopped) return
 
           const current = execution.model ?? currentModel(sessionID)
           if (!current) return
@@ -1087,11 +1309,17 @@ export default Plugin.define({
           execution.resumed = cfgNow.autoRetry
 
           log("timeout", sessionID, modelPath(current), `${int(cfgNow.timeoutSeconds, 120)}s`)
-          void switchTo(sessionID, current, `timeout ${int(cfgNow.timeoutSeconds, 120)}s`, {
-            interrupt: true,
-            prompt: cfgNow.autoRetry,
-            cool: false,
-          })
+          void switchTo(
+            sessionID,
+            current,
+            `timeout ${int(cfgNow.timeoutSeconds, 120)}s`,
+            {
+              interrupt: true,
+              prompt: cfgNow.autoRetry,
+              cool: false,
+            },
+            execution,
+          )
         }, seconds * 1000),
       }
     }
@@ -1151,6 +1379,12 @@ export default Plugin.define({
             if (!model?.providerID || !model?.id) return
             const selected = { providerID: model.providerID, modelID: model.id }
             modelBySession.set(sessionID, selected)
+
+            // A manual choice replaces the story the badge tells.
+            const badge = lastSwitch()[sessionID]
+            const badgeTarget = badge ? splitModel(badge.to) : undefined
+            if (badgeTarget && !sameModel(badgeTarget, selected)) forgetSwitch(sessionID)
+
             // A model change makes the old first-token watchdog meaningless.
             if (timeout?.sessionID === sessionID) cancelTimeout()
 
@@ -1166,5 +1400,53 @@ export default Plugin.define({
         onCleanup(cancelTimeout)
       },
     )
+
+    /* ---------------------------------- badge ---------------------------------- */
+
+    const FallbackBadge = (props: { sessionID: string; compact: boolean; active: boolean }) => {
+      const badge = () => lastSwitch()[props.sessionID]
+
+      const details = () => {
+        const value = badge()
+        if (!value) return ""
+        return ctx.t("badgeDetails", { from: value.from, to: value.to, reason: value.reason })
+      }
+
+      const show = () => {
+        if (!badge()) return
+        const title = ctx.t("badgeTitle")
+        const alert = (ctx.dialogs as any)?.alert
+        if (typeof alert === "function") {
+          void alert.call(ctx.dialogs, { title, description: details() })
+          return
+        }
+        ctx.toast.show({ variant: "success", title, description: details(), duration: 8000 })
+      }
+
+      return (
+        <Show when={props.active && badge() !== undefined}>
+          <ui.Tooltip value={details()}>
+            <Show
+              when={props.compact}
+              fallback={
+                <ui.Button variant="ghost-muted" size="small" icon="arrow-undo-down" onClick={show}>
+                  {ctx.t("badge")}
+                </ui.Button>
+              }
+            >
+              <ui.IconButton icon="arrow-undo-down" label={ctx.t("badgeAria")} onClick={show} />
+            </Show>
+          </ui.Tooltip>
+        </Show>
+      )
+    }
+
+    ctx.add(Slot, {
+      at: "session.header",
+      order: 10,
+      render: (input) => (
+        <FallbackBadge sessionID={input.session.id} compact={input.compact} active={input.active} />
+      ),
+    })
   },
 })

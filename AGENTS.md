@@ -43,9 +43,12 @@ stores values in the app's local storage under `plugin.local-model-fallback.conf
 - The plugin id comes from `index.js` (`id: "local-model-fallback"`), not from the
   npm package name. Keep it stable: renaming the package must not change the id,
   or every user loses the settings stored under `plugin.<id>.config`.
-- `DEFAULTS.models` and `DEFAULTS.patterns` **must stay empty**. They are what a
-  new installation and a published checkout see; personal providers must never
-  be committed.
+- `DEFAULTS.models`, `DEFAULTS.patterns` and `DEFAULTS.confirmModels` **must stay
+  empty**. They are what a new installation and a published checkout see;
+  personal providers must never be committed.
+- `confirmModels` holds chain entries that need a confirmation before switching
+  (paid models). It is a string list because the setting is edited as rows; keep
+  it in sync when a row is edited or deleted.
 - Numeric settings are strings (`maxAttempts`, `cooldownSeconds`,
   `timeoutSeconds`) because the UI edits them as text. Parse with
   `int(value, fallback)`.
@@ -94,12 +97,19 @@ early for other sessions). The timeout uses one timer at a time.
    (`server.data.location.model.list()` / `provider.list()`, syncing once if
    empty) via `catalogFor` / `resolveEntry`.
 5. Drops entries in cooldown or equal to the current model.
-6. Calls `client.session.switchModel({ sessionID, model: { id, providerID } })`
+6. For a target marked in `confirmModels`, interrupts the execution (to stop a
+   pending retry), asks with `ctx.dialogs.confirm`, and on decline skips every
+   other marked target in that attempt. Without `ctx.dialogs.confirm`, marked
+   targets are skipped safely.
+7. Calls `client.session.switchModel({ sessionID, model: { id, providerID } })`
    on the server and then mirrors the choice in `composer.setModel` when the
    session is routed. The composer call alone only changes the UI: a prompt sent
    before the server knows the new model runs the old one.
-7. Interrupts the running execution and sends the resume prompt when requested.
-8. Records the canonical model key in `lastSetBySession` and notifies.
+8. Interrupts the running execution and sends the resume prompt when requested.
+   A confirmation already interrupted it, so an approved switch resumes even if
+   the caller did not ask for a prompt.
+9. Records the canonical model key in `lastSetBySession`, updates the header
+   badge, and notifies.
 
 Invariants:
 
@@ -128,6 +138,17 @@ Invariants:
   `composer.setModel` is case-sensitive and rejects unknown ids.
 - A failed `setModel`, `switchModel`, `interrupt` or `prompt` must not throw out
   of the event handler.
+- A declined paid switch sets `execution.stopped`, so late failures and retries
+  of that execution cannot walk the chain again. One decline skips all remaining
+  marked targets in that attempt; unmarked targets are still tried.
+- A confirmation interrupts before the dialog and sets `execution.resumed`, so
+  the old model cannot resume itself while the dialog waits. An approved switch
+  sends the resume prompt even on the `session.retry.scheduled` path.
+- The header badge (`session.header` slot) is per session and in memory. A manual
+  `session.model.selected` for a different model clears it; the automatic
+  `session.model.selected` emitted by the switch itself must not.
+- Never switch to a marked model without a confirmation. On a build without
+  `ctx.dialogs.confirm`, skip marked targets instead of spending silently.
 
 ## Tests
 
@@ -140,8 +161,10 @@ bun run test
 The engine tests cover chained switches, resume prompts, dedupe, unrelated
 errors, empty chains, case-insensitive canonical resolution, chain order,
 cooldown after wrap, reporting of unresolved entries, first-token timeouts,
-stale failures after a switch, late retries from an old execution, and
-`retryAfterMs` cooldowns.
+stale failures after a switch, late retries from an old execution,
+`retryAfterMs` cooldowns, paid-model confirmation (approve, decline then free,
+decline all, late failures/retries after stopping) and the safe fallback when
+`Dialogs.confirm` is unavailable.
 
 To check the settings page without a desktop app, render it under a DOM shim
 (happy-dom) and stub `ui` as `{ Button, IconButton, Switch, TextInput }`; this is
@@ -170,7 +193,7 @@ the 2.2.5 shape. The published tests do not require a DOM.
    `opencode-model-fallback-gui`, while the plugin id stays
    `local-model-fallback`.
 7. Bump `version`, commit, and tag the release
-   (`git tag v2.0.1 && git push --tags`). The plugin is distributed through Git,
+   (`git tag v2.1.0 && git push --tags`). The plugin is distributed through Git,
    not npm.
 8. Git installs (`opencode plugin add github:aleksslab/opencode-model-fallback-gui`)
    use the committed `dist`; rebuild and commit before tagging.

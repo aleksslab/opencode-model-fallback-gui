@@ -19,6 +19,11 @@ config file.
 - **First-token timeout**: if a model produces nothing within a configurable
   window, the execution is interrupted and the next model is tried.
 - **Auto-resume** with a configurable prompt (`Continue` by default).
+- **Paid-model guard**: mark any chain entry with **Ask first**. Before switching
+  to it, the plugin interrupts the running turn and asks for confirmation. If you
+  decline, it keeps looking for the next unmarked (free) model instead.
+- **Header badge** showing the last automatic switch: which model failed, which
+  one took over, the reason, and when. It clears when you pick a model yourself.
 - **Toasts** for switches and for exhausted chains.
 - **Localized settings** (English and Russian) with an adaptive layout for newer
   and older desktop builds.
@@ -55,7 +60,7 @@ Or add the package to `plugins` in the global `opencode.json(c)`:
 Pin a tag or a commit when you need a stable snapshot:
 
 ```jsonc
-"plugins": ["github:aleksslab/opencode-model-fallback-gui#v2.0.1"]
+"plugins": ["github:aleksslab/opencode-model-fallback-gui#v2.1.0"]
 ```
 
 Updates are not applied silently to unpinned Git packages; run
@@ -128,6 +133,13 @@ other-provider/model-c
   first, skipping models that failed within the cooldown window.
 - If the current model is not in the chain, switching starts from the first
   entry.
+- Turn on **Ask first** on a row for models that may charge money. If you decline
+  the confirmation, the marked rows are skipped for that attempt and the plugin
+  continues to the next unmarked model. If none is left, the turn stops instead
+  of switching.
+
+The **Ask first** mark follows the row when you edit or move it, and is removed
+with the row.
 
 ## Settings
 
@@ -144,6 +156,7 @@ other-provider/model-c
 | Auto-resume | on | Send the resume prompt after switching. |
 | Resume prompt | `Continue` | Text sent after a switch. |
 | Fallback chain | empty | Ordered `provider/model-id` entries. |
+| Ask first (per chain row) | off | Confirm before switching to this model; use it for paid models. |
 
 ## How it works
 
@@ -166,6 +179,21 @@ that long (up to 24 hours) even if the configured cooldown is shorter.
 A timeout is not treated as a failure: the slow model is switched away from but
 not put in cooldown, so the chain can return to it when the other models fail.
 Changing the model manually cancels the timeout watchdog.
+
+### Paid models
+
+A chain row with **Ask first** enabled is not switched to silently. The plugin
+first interrupts the running execution (or the pending retry) and opens the app's
+confirmation dialog naming the failed model, the target and the reason. On
+**Switch** it changes the model and resumes the turn. On **Cancel** it skips every
+other marked row in the same attempt, switches to the next unmarked model if one
+exists, and otherwise stops the turn. Nothing is charged for a declined target.
+
+On an older desktop build without `Dialogs.confirm`, the plugin does not fall
+back to silent switching: marked rows are skipped and a toast reports why.
+
+The header badge is per session and in memory. It shows the last automatic
+switch until you choose a model yourself or another automatic switch replaces it.
 
 Before switching, chain entries are resolved against the app's live model
 catalog, so provider ids keep their real casing and model ids keep their real

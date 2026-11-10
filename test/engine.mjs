@@ -22,6 +22,11 @@ const setModelCalls = []
 const promptCalls = []
 const toasts = []
 const registered = []
+const confirmCalls = []
+const alerts = []
+
+let confirmAnswer = true
+let interruptCalls = 0
 
 let model = { providerID: "opencode", modelID: "opencode-default" }
 
@@ -31,6 +36,16 @@ const composer = {
     setModelCalls.push(`${next.providerID}/${next.modelID}`)
     model = { providerID: next.providerID, modelID: next.modelID }
     return true
+  },
+}
+
+const dialogs = {
+  async confirm(options) {
+    confirmCalls.push(options)
+    return typeof confirmAnswer === "function" ? confirmAnswer(options) : confirmAnswer
+  },
+  async alert(options) {
+    alerts.push(options)
   },
 }
 
@@ -44,6 +59,7 @@ const session = {
       session: {
         async switchModel() {},
         async interrupt() {
+          interruptCalls++
           return { interrupted: true }
         },
         async prompt(input) {
@@ -78,6 +94,7 @@ const ctx = {
   screen: { current: () => ({ composer }) },
   servers: { get: (id) => (id === "sidecar" ? { data } : undefined), list: () => ["sidecar"] },
   toast: { show: (input) => (toasts.push(input), { dismiss() {} }) },
+  dialogs,
   add: (registry, item) => registered.push({ registry, item }),
   t: (key, params) => {
     const text = def.i18n.en[key] ?? key
@@ -106,7 +123,8 @@ createRoot((close) => {
 // Defaults must be empty (no personal providers shipped).
 check("published defaults have no models", def.stores.config.initial.models.length === 0)
 check("published defaults have no patterns", def.stores.config.initial.patterns.length === 0)
-check("settings page registered", registered.length === 1)
+check("published defaults confirm no models", def.stores.config.initial.confirmModels.length === 0)
+check("settings page and header badge registered", registered.length === 2, JSON.stringify(registered.map((entry) => entry.registry)))
 
 // A configured chain still works.
 config.models = ["ProviderA/model-a", "ProviderB/model-b", "ProviderC/model-c"]
@@ -347,6 +365,148 @@ check(
   setModelCalls.length === beforeRetryAfter,
   JSON.stringify(setModelCalls),
 )
+
+// Confirming a switch to a model the user marked as paid. Fresh models keep the
+// cooldowns from the earlier cases out of these checks.
+catalog.push(
+  { providerID: "Omega", modelID: "model-free-a" },
+  { providerID: "Omega", modelID: "model-paid" },
+  { providerID: "Omega", modelID: "model-free-b" },
+)
+providers.push({ id: "Omega" })
+session.server.id = "sidecar-confirm"
+
+config.cooldownSeconds = "0"
+config.timeoutSeconds = "0"
+config.autoRetry = true
+config.maxAttempts = "10"
+
+session.id = "ses_confirm_yes"
+config.models = ["Omega/model-free-a", "Omega/model-paid"]
+config.confirmModels = ["Omega/model-paid"]
+model = { providerID: "Delta", modelID: "model-five" }
+confirmCalls.length = 0
+confirmAnswer = true
+const yesInterrupts = interruptCalls
+
+started("ses_confirm_yes")
+let beforeConfirm = setModelCalls.length
+failed(429, "rate limit exceeded")
+await tick()
+check(
+  "an unmarked target switches without confirmation",
+  setModelCalls[beforeConfirm] === "Omega/model-free-a" && confirmCalls.length === 0,
+  JSON.stringify({ calls: setModelCalls, confirms: confirmCalls.length }),
+)
+
+beforeConfirm = setModelCalls.length
+const yesPrompts = promptCalls.length
+started("ses_confirm_yes")
+failed(429, "rate limit exceeded")
+await tick()
+check(
+  "confirming a marked paid model switches and resumes",
+  setModelCalls[beforeConfirm] === "Omega/model-paid" &&
+    confirmCalls.length === 1 &&
+    promptCalls.length === yesPrompts + 1 &&
+    interruptCalls > yesInterrupts,
+  JSON.stringify({ calls: setModelCalls, confirms: confirmCalls.length, prompts: promptCalls.length }),
+)
+check(
+  "the confirmation names both models and the reason",
+  confirmCalls[0]?.title === def.i18n.en.confirmTitle &&
+    String(confirmCalls[0]?.description).includes("Omega/model-free-a") &&
+    String(confirmCalls[0]?.description).includes("Omega/model-paid") &&
+    String(confirmCalls[0]?.description).includes("HTTP 429"),
+  JSON.stringify(confirmCalls[0]),
+)
+
+// Declining keeps looking for an unmarked (free) model.
+session.id = "ses_confirm_decline_free"
+config.models = ["Omega/model-free-a", "Omega/model-paid", "Omega/model-free-b"]
+config.confirmModels = ["Omega/model-paid"]
+model = { providerID: "Delta", modelID: "model-five" }
+confirmCalls.length = 0
+confirmAnswer = false
+
+started("ses_confirm_decline_free")
+failed(429, "rate limit exceeded")
+await tick()
+const beforeDecline = setModelCalls.length
+started("ses_confirm_decline_free")
+failed(429, "rate limit exceeded")
+await tick()
+check(
+  "declining a paid model continues to the next free model",
+  setModelCalls[beforeDecline] === "Omega/model-free-b" &&
+    confirmCalls.length === 1 &&
+    !setModelCalls.slice(beforeDecline).includes("Omega/model-paid"),
+  JSON.stringify({ calls: setModelCalls, confirms: confirmCalls.length }),
+)
+
+// Declining once skips the rest of the marked models in the same attempt, and
+// the execution stays stopped against late failures and retries.
+session.id = "ses_confirm_decline_all"
+config.models = ["Omega/model-free-a", "Omega/model-paid"]
+config.confirmModels = ["Omega/model-free-a", "Omega/model-paid"]
+model = { providerID: "Delta", modelID: "model-five" }
+confirmCalls.length = 0
+confirmAnswer = false
+const allBefore = setModelCalls.length
+const allToasts = toasts.length
+
+started("ses_confirm_decline_all")
+failed(429, "rate limit exceeded")
+await tick()
+check(
+  "declining skips every remaining marked model after one prompt",
+  setModelCalls.length === allBefore && confirmCalls.length === 1,
+  JSON.stringify({ calls: setModelCalls, confirms: confirmCalls.length }),
+)
+check(
+  "declining explains that paid models were skipped",
+  toasts.length > allToasts && toasts.at(-1)?.description === def.i18n.en.declinedBody,
+  JSON.stringify(toasts.at(-1)),
+)
+
+const stoppedBefore = setModelCalls.length
+failed(429, "rate limit exceeded")
+await tick()
+check("a late failure after declining does not switch", setModelCalls.length === stoppedBefore, JSON.stringify(setModelCalls))
+
+emit("session.retry.scheduled", {
+  data: {
+    sessionID: "ses_confirm_decline_all",
+    assistantMessageID: "msg_declined",
+    attempt: 1,
+    error: { status: 500, message: "upstream" },
+  },
+})
+await tick()
+check("a retry after declining does not switch", setModelCalls.length === stoppedBefore, JSON.stringify(setModelCalls))
+
+// An app build without `Dialogs.confirm` must never spend silently: marked
+// models are skipped, free ones still work.
+session.id = "ses_confirm_unavailable"
+config.models = ["Omega/model-free-a", "Omega/model-paid"]
+config.confirmModels = ["Omega/model-free-a"]
+model = { providerID: "Delta", modelID: "model-five" }
+confirmCalls.length = 0
+const savedDialogs = ctx.dialogs
+ctx.dialogs = {}
+const unavailableBefore = setModelCalls.length
+
+started("ses_confirm_unavailable")
+failed(429, "rate limit exceeded")
+await tick()
+ctx.dialogs = savedDialogs
+check(
+  "without a confirm dialog, marked models are skipped and free ones still switch",
+  setModelCalls[unavailableBefore] === "Omega/model-paid" &&
+    toasts.at(-1)?.description === def.i18n.en.switchedBody.replace("{{model}}", "Omega/model-paid").replace("{{reason}}", "HTTP 429"),
+  JSON.stringify({ calls: setModelCalls, toasts: toasts.at(-1) }),
+)
+confirmAnswer = true
 
 dispose()
 console.log(failures === 0 ? "ALL PASS" : `${failures} FAILED`)
