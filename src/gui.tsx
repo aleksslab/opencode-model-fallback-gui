@@ -72,7 +72,8 @@ const definition = Plugin.define({
       notify: "Show notifications",
       notifyDescription: "Show a toast whenever a model is switched.",
       codes: "HTTP status codes",
-      codesDescription: "Comma or space separated. A matching status triggers a switch.",
+      codesDescription:
+        "Comma or space separated. These statuses always trigger a switch. Provider errors and other 4xx/5xx switch by default, except 400, 413, 414, 415, 422 and 499.",
       patterns: "Error message patterns",
       patternsDescription: "Case-insensitive regular expressions matched against the error message.",
       patternN: "Pattern {{n}}",
@@ -148,7 +149,8 @@ const definition = Plugin.define({
       notify: "Показывать уведомления",
       notifyDescription: "Показывать всплывающее уведомление при каждой смене модели.",
       codes: "HTTP-коды ошибок",
-      codesDescription: "Через запятую или пробел. Совпавший код запускает переключение.",
+      codesDescription:
+        "Через запятую или пробел. Эти коды всегда запускают переключение. Ошибки провайдера и остальные 4xx/5xx переключают по умолчанию, кроме 400, 413, 414, 415, 422 и 499.",
       patterns: "Шаблоны текста ошибок",
       patternsDescription: "Регулярные выражения без учёта регистра, проверяются по тексту ошибки.",
       patternN: "Шаблон {{n}}",
@@ -225,6 +227,9 @@ const BUILTIN_PATTERNS = [
   /high demand/i,
   /overloaded/i,
   /over capacity/i,
+  /capacity is limited/i,
+  /per[\s_-]?minute/i,
+  /try again (?:later|shortly|in|after)/i,
   /billing/i,
   /insufficient/i,
   /payment required/i,
@@ -351,12 +356,57 @@ function entryMatches(entry: string, model: Model) {
   return modelIdsMatch(parsed.modelID, model.modelID)
 }
 
+/**
+ * Statuses caused by the request itself. Switching models would only hide a bug
+ * and would cool models that are perfectly healthy, so these need an explicit
+ * status code or a matching pattern to switch.
+ */
+const NON_RETRY_STATUSES = new Set([400, 413, 414, 415, 422, 499])
+
+/** Machine-readable error kinds reported by the app; they never depend on the provider's language. */
+const RETRY_ERROR_TYPES = new Set([
+  "provider.auth",
+  "provider.billing",
+  "provider.free-limit",
+  "provider.network",
+  "provider.not-found",
+  "provider.overloaded",
+  "provider.quota",
+  "provider.rate-limit",
+  "provider.timeout",
+  "provider.unavailable",
+])
+
+function errorStatus(error: any): number | undefined {
+  const raw = error?.status ?? error?.statusCode
+  const status = typeof raw === "string" ? Number(raw) : raw
+  return typeof status === "number" && Number.isFinite(status) ? status : undefined
+}
+
+/** A user cancellation is not a provider failure and must never switch the model. */
+function isUserAbort(error: any) {
+  const type = String(error?.type ?? "")
+  const name = String(error?.name ?? "")
+  if (/abort|cancel/i.test(type) || /abort|cancel/i.test(name)) return true
+  return errorStatus(error) === 499
+}
+
 function matchError(error: any, config: Config) {
-  const status = typeof error?.status === "number" ? error.status : undefined
+  if (isUserAbort(error)) return undefined
+
+  const status = errorStatus(error)
+  const type = String(error?.type ?? "").trim()
   const message = `${error?.message ?? ""} ${error?.response?.body ?? ""}`.trim()
 
-  if (status !== undefined && parseCodes(config.retryCodes).includes(status)) {
-    return `HTTP ${status}`
+  // Prefer the machine-readable shape over the wording, so throttling reported
+  // in Russian, Chinese or broken English is handled exactly like English.
+  if (type && (RETRY_ERROR_TYPES.has(type) || type.startsWith("provider."))) {
+    return status !== undefined ? `${type} (HTTP ${status})` : type
+  }
+
+  if (status !== undefined) {
+    if (parseCodes(config.retryCodes).includes(status)) return `HTTP ${status}`
+    if (status >= 400 && !NON_RETRY_STATUSES.has(status)) return `HTTP ${status}`
   }
 
   for (const regex of BUILTIN_PATTERNS) {
@@ -1254,6 +1304,15 @@ export default Plugin.define({
             continue
           }
 
+          // A dialog raised from a background chat interrupts that chat and then
+          // waits for an answer nobody can see, so only ask in the open session.
+          if (!routedSession(sessionID)) {
+            log("skip confirm outside the active chat", entry)
+            declined = true
+            skippedMarked++
+            continue
+          }
+
           if (typeof ask !== "function") {
             log("confirmation unavailable", entry)
             unavailable = true
@@ -1354,7 +1413,9 @@ export default Plugin.define({
       const cfg = config()
       if (!cfg.enabled) return
 
-      const session = routedSession(sessionID)
+      // A failure in a background chat must still advance that chat's chain.
+      // Otherwise the chat sits dead until the user notices and presses Continue.
+      const session = liveSession(sessionID)
       if (!session) return
 
       // Attribute the failure to the model the execution started on. The composer
@@ -1403,7 +1464,7 @@ export default Plugin.define({
       const cfg = config()
       if (!cfg.enabled) return
 
-      const session = routedSession(sessionID)
+      const session = liveSession(sessionID)
       if (!session) return
 
       // The same retry can be announced more than once, and a retry scheduled for
@@ -1444,7 +1505,7 @@ export default Plugin.define({
       const seconds = int(cfg.timeoutSeconds, 120)
       if (seconds <= 0) return
 
-      const session = routedSession(sessionID)
+      const session = liveSession(sessionID)
       if (!session) return
 
       cancelTimeout()
@@ -1455,7 +1516,7 @@ export default Plugin.define({
           timeout = undefined
           const cfgNow = config()
           if (!cfgNow.enabled || int(cfgNow.timeoutSeconds, 120) <= 0) return
-          if (!routedSession(sessionID)) return
+          if (!liveSession(sessionID)) return
 
           const execution = executionFor(sessionID)
           if (execution.switched || execution.stopped) return

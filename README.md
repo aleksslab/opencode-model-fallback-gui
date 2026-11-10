@@ -10,8 +10,8 @@ config file.
 
 ## Features
 
-- **Automatic model switching** on HTTP status codes, regular-expression error
-  patterns, or any error.
+- **Automatic model switching** on the error's machine-readable shape (HTTP status
+  and error type), regular-expression error patterns, or any error.
 - **Ordered fallback chain** that wraps around and skips models in cooldown.
 - **Case-insensitive matching** that resolves entries to the provider ids the app
   actually uses. An entry no connected provider offers is skipped and reported
@@ -186,7 +186,7 @@ with the row.
 | --- | --- | --- |
 | Enable fallback | on | Master switch. |
 | Show notifications | on | Toast on every switch. |
-| HTTP status codes | `429, 408, 500, 502, 503, 504, 529` | Comma or space separated. |
+| HTTP status codes | `429, 408, 500, 502, 503, 504, 529` | Extra statuses that always switch. |
 | Error message patterns | empty | Case-insensitive regular expressions. |
 | Switch on any error | off | Fall back even when nothing matched. |
 | Maximum switches | `10` | Models tried per turn before giving up. |
@@ -196,6 +196,20 @@ with the row.
 | Resume prompt | `Continue` | Text sent after a switch. |
 | Fallback chain | empty | Ordered `provider/model-id` entries. |
 | Ask first (per chain row) | off | Confirm before switching to this model; use it for paid models. |
+
+A failure is recognized by its shape before its text. Provider errors
+(`provider.rate-limit`, `provider.quota`, `provider.free-limit`, `provider.auth`
+and other `provider.*` kinds) and every 4xx/5xx status except `400`, `413`, `414`,
+`415`, `422` and `499` switch the model. That makes the behaviour independent of
+the language the provider answers in: Russian, Chinese and English messages are
+treated the same. The request-shape statuses above are excluded so a malformed
+request cannot cool healthy models; list one in **HTTP status codes** to switch on
+it anyway.
+
+A user cancellation (`CancelledError`, `AbortError`, status `499`) never switches.
+When an error carries neither a status nor a known type, the built-in message
+patterns (rate limit, quota, high demand, overload, timeout, connection and
+provider errors) and your own patterns are used as a fallback.
 
 ## How it works
 
@@ -211,6 +225,12 @@ The plugin subscribes to the desktop sidecar events:
   switch is not blamed for the old model's errors. One execution causes at most
   one switch; a retry is deduplicated by its assistant message id.
 - `session.execution.succeeded` resets the per-turn attempt counters.
+
+Failures from chats that are not on screen are handled too: the model is switched
+on the server and the turn is resumed in that chat, so a background session does
+not sit dead until you return to it. A model marked **Ask first** is never
+confirmed from a background chat; it is skipped, because a dialog raised there
+would interrupt a chat you cannot see.
 
 When a provider reports `retryAfterMs`, that model stays out of the chain for
 that long (up to 24 hours) even if the configured cooldown is shorter.

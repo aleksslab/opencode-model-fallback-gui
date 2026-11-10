@@ -20,6 +20,7 @@ const data = {
 
 const setModelCalls = []
 const promptCalls = []
+const serverSwitches = []
 const toasts = []
 const registered = []
 const confirmCalls = []
@@ -57,7 +58,9 @@ const session = {
     id: "sidecar",
     client: {
       session: {
-        async switchModel() {},
+        async switchModel(input) {
+          serverSwitches.push(`${input.sessionID} ${input.model.providerID}/${input.model.id}`)
+        },
         async interrupt() {
           interruptCalls++
           return { interrupted: true }
@@ -72,6 +75,8 @@ const session = {
 }
 
 let config = { ...def.stores.config.initial }
+
+const extraSessions = []
 
 const ctx = {
   id: "local-model-fallback",
@@ -90,7 +95,7 @@ const ctx = {
       },
     },
   },
-  sessions: { current: () => session, list: () => [session] },
+  sessions: { current: () => session, list: () => [session, ...extraSessions] },
   screen: { current: () => ({ composer }) },
   servers: { get: (id) => (id === "sidecar" ? { data } : undefined), list: () => ["sidecar"] },
   toast: { show: (input) => (toasts.push(input), { dismiss() {} }) },
@@ -130,8 +135,8 @@ check("settings page and header badge registered", registered.length === 2, JSON
 config.models = ["ProviderA/model-a", "ProviderB/model-b", "ProviderC/model-c"]
 
 const started = (sessionID = session.id) => emit("session.execution.started", { data: { sessionID } })
-const failed = (status, message, extra = {}) =>
-  emit("session.execution.failed", { data: { sessionID: session.id, error: { status, message, ...extra } } })
+const failed = (status, message, extra = {}, sessionID = session.id) =>
+  emit("session.execution.failed", { data: { sessionID, error: { status, message, ...extra } } })
 
 started()
 failed(429, "rate limit exceeded")
@@ -158,14 +163,117 @@ failed(undefined, "user aborted the tool call")
 await tick()
 check("unrelated error ignored", setModelCalls.length === beforeIgnore)
 
+// Providers answer in whatever language they like. Recognition must come from
+// the status and the machine-readable error type, not from the wording.
+session.id = "ses_structural"
+config.models = ["Struct/model-a", "Struct/model-b"]
+model = { providerID: "Seed", modelID: "seed" }
+
+started("ses_structural")
+const beforeChinese = setModelCalls.length
+failed(429, "模型当前繁忙，请稍后再试。", {}, "ses_structural")
+await tick()
+check(
+  "a rate limit reported in Chinese still switches",
+  setModelCalls[beforeChinese] === "Struct/model-a",
+  JSON.stringify(setModelCalls),
+)
+
+model = { providerID: "Seed", modelID: "seed" }
+started("ses_structural")
+const beforeTypeOnly = setModelCalls.length
+failed(undefined, "Квота исчерпана", { type: "provider.quota" }, "ses_structural")
+await tick()
+check(
+  "an error type without a status still switches",
+  setModelCalls[beforeTypeOnly] === "Struct/model-a",
+  JSON.stringify(setModelCalls),
+)
+
+const beforeBadRequest = setModelCalls.length
+failed(400, "invalid request body", {}, "ses_structural")
+await tick()
+check("a request-shape error does not switch or cool models", setModelCalls.length === beforeBadRequest)
+
+const beforeAbort = setModelCalls.length
+failed(undefined, "The operation was aborted", { type: "MessageAbortedError" }, "ses_structural")
+await tick()
+check("a user abort does not switch", setModelCalls.length === beforeAbort)
+
+// A chat that is not on screen must keep failing over; otherwise it sits dead
+// until the user comes back and presses Continue.
+const background = { ...session, id: "ses_background", key: "sidecar\nses_background" }
+extraSessions.push(background)
+config.models = ["Back/back-a", "Back/back-b"]
+config.confirmModels = []
+emit("session.model.selected", {
+  data: { sessionID: "ses_background", model: { id: "back-a", providerID: "Back" } },
+})
+
+const beforeBackground = serverSwitches.length
+const composerBefore = setModelCalls.length
+emit("session.execution.started", { data: { sessionID: "ses_background" } })
+failed(undefined, "лимит", { type: "provider.rate-limit" }, "ses_background")
+await tick()
+check(
+  "a failure in a background chat advances that chat",
+  serverSwitches.slice(beforeBackground).includes("ses_background Back/back-b"),
+  JSON.stringify(serverSwitches.slice(beforeBackground)),
+)
+check(
+  "a background switch leaves the visible composer alone",
+  setModelCalls.length === composerBefore,
+  JSON.stringify(setModelCalls.slice(composerBefore)),
+)
+check(
+  "a background chat is resumed in place",
+  promptCalls.at(-1)?.sessionID === "ses_background",
+  JSON.stringify(promptCalls.at(-1)),
+)
+
+// A paid model in a background chat must not open a dialog nobody can see.
+config.models = ["Back/back-c", "Paid/model-p"]
+config.confirmModels = ["Paid/model-p"]
+emit("session.model.selected", {
+  data: { sessionID: "ses_background", model: { id: "back-c", providerID: "Back" } },
+})
+const dialogsBefore = confirmCalls.length
+const switchesBeforePaid = serverSwitches.length
+emit("session.execution.started", { data: { sessionID: "ses_background" } })
+failed(undefined, "额度已用尽", { type: "provider.quota" }, "ses_background")
+await tick()
+check("a background chat does not open a paid-model dialog", confirmCalls.length === dialogsBefore)
+check("a background chat skips the paid model", serverSwitches.length === switchesBeforePaid)
+config.confirmModels = []
+
+
 // Empty chain after reset: must not throw, must notify.
 config.models = []
 const toastsBefore = toasts.length
+const beforeEmpty = setModelCalls.length
 started()
 failed(503, "service unavailable")
 await tick()
-check("empty chain does not switch", setModelCalls.length === 2)
+check("empty chain does not switch", setModelCalls.length === beforeEmpty)
 check("empty chain notifies", toasts.length > toastsBefore, JSON.stringify(toasts))
+
+// Providers sometimes report a per-minute throttle as HTTP 403. It must be
+// treated as a rate limit, or the chain stops on the first throttled model.
+session.id = "ses_per_minute"
+config.models = ["PerMinute/provider-a", "PerMinute/provider-b"]
+model = { providerID: "Seed", modelID: "seed" }
+started("ses_per_minute")
+const beforePerMinute = setModelCalls.length
+failed(
+  403,
+  "This model is at its provider's per minute limit right now. Nothing is used up on your side. Try again in a minute.",
+)
+await tick()
+check(
+  "403 per-minute limit switches to the next model",
+  setModelCalls[beforePerMinute] === "PerMinute/provider-a",
+  JSON.stringify(setModelCalls),
+)
 
 // Canonical, case-insensitive provider/model resolution.
 const catalog = [

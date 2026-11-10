@@ -88,6 +88,24 @@ stores values in the app's local storage under `plugin.local-model-fallback.conf
 - `addCurrentModel` only appends `composer.model()` to the chain; it must not
   switch the session or touch `lastSetBySession`.
 
+## Error matching
+
+`matchError` prefers the machine-readable shape over the text, because providers
+answer in any language:
+
+1. `isUserAbort` (error type or name containing `abort`/`cancel`, or status
+   `499`) returns no match - a cancellation is never a provider failure.
+2. A `provider.*` error type (and every type in `RETRY_ERROR_TYPES`) switches,
+   with or without a status.
+3. Any status `>= 400` switches, except `NON_RETRY_STATUSES` (`400`, `413`, `414`,
+   `415`, `422`, `499`). Those are caused by the request itself; switching would
+   cool healthy models, so they need an explicit code in `retryCodes` or a
+   pattern.
+4. `BUILTIN_PATTERNS`, then the user's `patterns`, are the last resort for errors
+   that carry neither a status nor a known type. Do not add a pattern for
+   something a status or type already covers.
+5. `fallbackOnAnyError` matches whatever is left.
+
 ## Event contract (desktop 2.2.5)
 
 The engine subscribes to `ctx.servers.get("sidecar")?.data` inside `createKeyed`,
@@ -114,8 +132,12 @@ instead of walking the chain again. `assistantMessageID` from
 `session.retry.scheduled` is kept in `handledRetries` so a late retry from an old
 execution cannot switch after a new execution started.
 
-Only the session routed in the app window is monitored (`onFailure` returns
-early for other sessions). The timeout uses one timer at a time.
+Failures are handled for every live session, not only the one routed in the app
+window: a background chat keeps failing over on the server instead of sitting dead
+until the user returns. The composer is only mirrored for the routed session. A
+model marked in `confirmModels` is skipped (never confirmed) outside the routed
+session, so no dialog interrupts an unseen chat. The timeout uses one timer at a
+time.
 
 ## Switching
 
@@ -131,9 +153,10 @@ early for other sessions). The timeout uses one timer at a time.
    empty) via `catalogFor` / `resolveEntry`.
 5. Drops entries in cooldown or equal to the current model.
 6. For a target marked in `confirmModels`, interrupts the execution (to stop a
-   pending retry), asks with `ctx.dialogs.confirm`, and on decline skips every
+   pending retry) and asks with `ctx.dialogs.confirm`, then on decline skips every
    other marked target in that attempt. Without `ctx.dialogs.confirm`, marked
-   targets are skipped safely.
+   targets are skipped safely. Outside the routed session the dialog is not shown:
+   the marked target is skipped instead.
 7. Calls `client.session.switchModel({ sessionID, model: { id, providerID } })`
    on the server and then mirrors the choice in `composer.setModel` when the
    session is routed. The composer call alone only changes the UI: a prompt sent
@@ -197,8 +220,12 @@ The engine tests cover chained switches, resume prompts, dedupe, unrelated
 errors, empty chains, case-insensitive canonical resolution, chain order,
 cooldown after wrap, reporting of unresolved entries, first-token timeouts,
 stale failures after a switch, late retries from an old execution,
-`retryAfterMs` cooldowns, paid-model confirmation (approve, decline then free,
-decline all, late failures/retries after stopping) and the safe fallback when
+`retryAfterMs` cooldowns, per-minute throttling reported as HTTP 403,
+language-independent matching (a Chinese rate-limit message, a type without a
+status), request-shape errors that must not cool models, user aborts, background
+chats that keep failing over without touching the visible composer, paid-model
+confirmation (approve, decline then free, decline all, late failures/retries
+after stopping, no dialog from a background chat) and the safe fallback when
 `Dialogs.confirm` is unavailable.
 
 To check the settings page without a desktop app, render it under a DOM shim
