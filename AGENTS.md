@@ -69,6 +69,12 @@ stores values in the app's local storage under `plugin.local-model-fallback.conf
   `int(value, fallback)`.
 - Treat schema changes as additive. Renaming or removing a key breaks existing
   installations.
+- `clickAction` (`"last"` or `"log"`, default `"log"`) is built as
+  `Schema.Union([Schema.Literal("last"), Schema.Literal("log")])`. In Effect 4
+  `Schema.Literal` takes a single value: passing two makes a schema that rejects
+  the default, store loading throws, and the renderer shows a fatal error. Keep
+  the test that decodes `DEFAULTS` through the declared schema; it catches this
+  class of bug before release.
 
 ## Settings UI
 
@@ -205,6 +211,17 @@ Invariants:
   `session.model.selected` emitted by the switch itself must not. Its
   registration is guarded: a build without this slot logs
   `header badge unavailable` and keeps the engine running.
+- A badge click follows `clickAction`: `log` opens the side panel's log tab
+  (`<plugin id>:log`) for the current session and, when the side panel is closed,
+  opens it too; `last` shows the previous switch in a dialog. Without
+  `ctx.layout.open` both fall back to the dialog/toast. The `session.panel` menu
+  item always opens the log, whatever `clickAction` says.
+- The log (`Panel`, `region: "side"`, `list: ({ open }) => ...`) lists only
+  today's switches (newest first, `LOG_LIMIT` 60 kept in memory per session).
+  Clearing the log must not clear the badge: they are separate views.
+- Register the log's Clear control with `ui.Button`: a native `<button onClick>`
+  emits a module-level `delegateEvents(["click"])`, and `solid-js/web` then needs
+  `window` at load, which breaks the node test harness.
 - Never switch to a marked model without a confirmation. On a build without
   `ctx.dialogs.confirm`, skip marked targets instead of spending silently.
 
@@ -226,11 +243,13 @@ status), request-shape errors that must not cool models, user aborts, background
 chats that keep failing over without touching the visible composer, paid-model
 confirmation (approve, decline then free, decline all, late failures/retries
 after stopping, no dialog from a background chat) and the safe fallback when
-`Dialogs.confirm` is unavailable.
+`Dialogs.confirm` is unavailable. They also decode `DEFAULTS` through the config
+schema, assert the log panel lists its tab only while open, and that the
+`session.panel` menu item opens the log tab and the side panel.
 
 To check the settings page without a desktop app, render it under a DOM shim
-(happy-dom) and stub `ui` as `{ Button, IconButton, Switch, TextInput }`; this is
-the 2.2.5 shape. The published tests do not require a DOM.
+(happy-dom) and stub `ui` as `{ Button, IconButton, Switch, Select, TextInput }`;
+this is the 2.2.6 shape. The published tests do not require a DOM.
 
 ## Debugging
 

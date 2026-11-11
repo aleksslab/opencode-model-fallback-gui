@@ -1,6 +1,6 @@
 import { Index, Show, createSignal, onCleanup } from "solid-js"
 import { Schema } from "effect"
-import { Plugin, Store, SettingsPage, Slot, createKeyed } from "@opencode/plugin/gui"
+import { Plugin, Store, SettingsPage, Slot, Panel, MenuItem, createKeyed } from "@opencode/plugin/gui"
 
 /* ------------------------------------------------------------------------- */
 /* Config                                                                     */
@@ -19,7 +19,11 @@ const DEFAULTS = {
   triggerText: "Continue",
   models: [],
   confirmModels: [],
+  clickAction: "log" as ClickAction,
 }
+
+/** What a click on the header badge does: show the last switch or open today's log. */
+type ClickAction = "last" | "log"
 
 type Config = {
   enabled: boolean
@@ -35,6 +39,7 @@ type Config = {
   models: string[]
   /** Chain entries that require a confirmation before switching to them. */
   confirmModels: string[]
+  clickAction: ClickAction
 }
 
 const ConfigSchema = Schema.Struct({
@@ -50,6 +55,7 @@ const ConfigSchema = Schema.Struct({
   triggerText: Schema.String,
   models: Schema.Array(Schema.String),
   confirmModels: Schema.Array(Schema.String),
+  clickAction: Schema.Union([Schema.Literal("last"), Schema.Literal("log")]),
 })
 
 const definition = Plugin.define({
@@ -117,7 +123,16 @@ const definition = Plugin.define({
       badge: "Fallback",
       badgeTitle: "Last fallback switch",
       badgeDetails: "From {{from}} to {{to}}. Reason: {{reason}}.",
-      badgeAria: "Show the last fallback switch",
+      badgeAria: "Open the fallback log",
+      clickAction: "Header button click",
+      clickActionDescription:
+        "What the Fallback button in a chat header does: show the last switch in a window or open today's switch log in the side panel.",
+      clickLast: "Show the last switch",
+      clickLog: "Open today's log",
+      logTitle: "Fallback log",
+      logEmpty: "No fallback switches today.",
+      logClear: "Clear",
+      logAttempt: "attempt {{n}}",
       reset: "Reset to defaults",
       moveUp: "Move up",
       moveDown: "Move down",
@@ -194,7 +209,16 @@ const definition = Plugin.define({
       badge: "Автосмена",
       badgeTitle: "Последнее переключение",
       badgeDetails: "С {{from}} на {{to}}. Причина: {{reason}}.",
-      badgeAria: "Показать последнее переключение",
+      badgeAria: "Открыть журнал переключений",
+      clickAction: "Клик по кнопке в хедере",
+      clickActionDescription:
+        "Что делает кнопка «Автосмена» в хедере чата: показывает последнее переключение в окне или открывает журнал переключений за сегодня в боковой панели.",
+      clickLast: "Показать последнее переключение",
+      clickLog: "Открыть журнал за сегодня",
+      logTitle: "Журнал переключений",
+      logEmpty: "Сегодня переключений ещё не было.",
+      logClear: "Очистить",
+      logAttempt: "попытка {{n}}",
       reset: "Сбросить настройки",
       moveUp: "Выше",
       moveDown: "Ниже",
@@ -298,6 +322,25 @@ type Model = { providerID: string; modelID: string; name?: string; paid?: boolea
 
 function modelPath(model: Model) {
   return `${model.providerID}/${model.modelID}`
+}
+
+/** Time for the switch log: clock only for today, date and time for older entries. */
+function formatLogTime(at: number) {
+  const date = new Date(at)
+  const time = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+  if (isToday(at)) return time
+  return `${date.toLocaleDateString()} ${time}`
+}
+
+/** The log keeps today's switches; older ones stay in memory but are not listed. */
+function isToday(at: number) {
+  const date = new Date(at)
+  const now = new Date()
+  return (
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate()
+  )
 }
 
 /** Display name for a model, falling back to its id. */
@@ -762,6 +805,35 @@ export default Plugin.define({
 
     /* -------------------------------- settings -------------------------------- */
 
+    /** Two-way choice: a native select when the host has one, a switch otherwise. */
+    const Choice = (props: {
+      label: string
+      value: ClickAction
+      onChange: (value: ClickAction) => void
+    }) => {
+      const NativeSelect = (ui as any).Select
+      if (NativeSelect) {
+        return (
+          <NativeSelect
+            label={props.label}
+            value={props.value}
+            options={[
+              { value: "last", label: ctx.t("clickLast") },
+              { value: "log", label: ctx.t("clickLog") },
+            ]}
+            onChange={props.onChange}
+          />
+        )
+      }
+      return (
+        <ui.Switch
+          label={ctx.t("clickLog")}
+          checked={props.value === "log"}
+          onChange={(checked) => props.onChange(checked ? "log" : "last")}
+        />
+      )
+    }
+
     const Settings = () => {
       return (
         <Layout
@@ -799,6 +871,20 @@ export default Plugin.define({
                 checked={config().autoRetry}
                 onChange={(checked) => edit((draft) => (draft.autoRetry = checked))}
               />
+            </Row>
+
+            <Row
+              id="click-action"
+              title={ctx.t("clickAction")}
+              description={ctx.t("clickActionDescription")}
+            >
+              <div style={{ "min-width": "210px" }}>
+                <Choice
+                  label={ctx.t("clickAction")}
+                  value={config().clickAction}
+                  onChange={(value) => edit((draft) => (draft.clickAction = value))}
+                />
+              </div>
             </Row>
           </Section>
 
@@ -1028,6 +1114,7 @@ export default Plugin.define({
           { id: "local-model-fallback", title: ctx.t("title"), description: ctx.t("description") },
           { id: "enabled", title: ctx.t("entryEnabled"), keywords: "fallback model provider" },
           { id: "auto-retry", title: ctx.t("entryResume"), keywords: "resume continue retry" },
+          { id: "click-action", title: ctx.t("clickAction"), keywords: "badge header button log window" },
           { id: "codes", title: ctx.t("entryTrigger"), keywords: "status http 429 500 error" },
           { id: "any-error", title: ctx.t("anyError"), keywords: "error pattern" },
           { id: "max-attempts", title: ctx.t("entryLimits"), keywords: "attempts cooldown timeout" },
@@ -1058,12 +1145,31 @@ export default Plugin.define({
     }
 
     /** What the header badge shows for a session after an automatic switch. */
-    type LastSwitch = { from: string; to: string; reason: string; at: number }
+    type LastSwitch = { from: string; to: string; reason: string; at: number; attempt?: number }
+
+    /** How many switches the side log keeps per session. */
+    const LOG_LIMIT = 60
 
     const [lastSwitch, setLastSwitch] = createSignal<Record<string, LastSwitch | undefined>>({})
+    /** Newest first; in memory, one list per session. */
+    const [switchHistory, setSwitchHistory] = createSignal<Record<string, LastSwitch[]>>({})
 
     const rememberSwitch = (sessionID: string, value: LastSwitch) => {
       setLastSwitch((previous) => ({ ...previous, [sessionID]: value }))
+      setSwitchHistory((previous) => ({
+        ...previous,
+        [sessionID]: [value, ...(previous[sessionID] ?? [])].slice(0, LOG_LIMIT),
+      }))
+    }
+
+    /** Clearing a session's log must not take the badge with it: they are separate views. */
+    const clearSwitchHistory = (sessionID: string) => {
+      setSwitchHistory((previous) => {
+        if (!previous[sessionID]) return previous
+        const next = { ...previous }
+        delete next[sessionID]
+        return next
+      })
     }
 
     const forgetSwitch = (sessionID: string) => {
@@ -1405,6 +1511,7 @@ export default Plugin.define({
         to: modelPath(switched),
         reason,
         at: Date.now(),
+        attempt: used + 1,
       })
       notify(ctx.t("switchedTitle"), ctx.t("switchedBody", { model: modelPath(switched), reason }), "success")
     }
@@ -1620,9 +1727,112 @@ export default Plugin.define({
       },
     )
 
-    /* ---------------------------------- badge ---------------------------------- */
+    /* -------------------------------- badge + log ------------------------------- */
 
-    const FallbackBadge = (props: { sessionID: string; compact: boolean; active: boolean }) => {
+    const logKey = `${ctx.id}:log`
+
+    /** Open this session's switch log in the side panel; false when the host has no panels. */
+    const openLog = (session: any) => {
+      const layout = (ctx as any).layout
+      if (typeof layout?.open !== "function") return false
+      try {
+        layout.open(logKey, session, { tab: "open" })
+        if (typeof layout.side?.opened === "function" && !layout.side.opened(session)) {
+          layout.side.toggle(session)
+        }
+        return true
+      } catch (cause) {
+        log("log panel open failed", String(cause))
+        return false
+      }
+    }
+
+    const logRowStyle = {
+      display: "flex",
+      "flex-direction": "column",
+      gap: "2px",
+      padding: "8px 0",
+      "border-bottom": "1px solid rgba(128, 128, 128, 0.14)",
+    }
+    const logTimeStyle = { "font-size": "11px", opacity: 0.6, "font-variant-numeric": "tabular-nums" }
+    const logModelsStyle = { "font-size": "12px", "word-break": "break-word" }
+    const logReasonStyle = { "font-size": "11px", opacity: 0.7, "word-break": "break-word" }
+
+    /** Today's switch history, newest first, in the side panel. */
+    const SwitchLog = (props: { session: () => { id: string } }) => {
+      const entries = () =>
+        (switchHistory()[props.session().id] ?? []).filter((entry) => isToday(entry.at))
+
+      return (
+        <div style={{ display: "flex", "flex-direction": "column", height: "100%", "min-height": "0" }}>
+          <div
+            style={{
+              display: "flex",
+              "align-items": "center",
+              gap: "8px",
+              padding: "10px 12px",
+              "border-bottom": "1px solid rgba(128, 128, 128, 0.18)",
+            }}
+          >
+            <span style={{ flex: "1", "font-size": "12px", "font-weight": "600" }}>{ctx.t("logTitle")}</span>
+            <Show when={entries().length > 0}>
+              <ui.Button
+                size="small"
+                variant="ghost-muted"
+                icon="trash"
+                onClick={() => clearSwitchHistory(props.session().id)}
+              >
+                {ctx.t("logClear")}
+              </ui.Button>
+            </Show>
+          </div>
+          <div style={{ flex: "1", "min-height": "0", overflow: "auto", padding: "4px 12px 12px" }}>
+            <Show
+              when={entries().length > 0}
+              fallback={
+                <div style={{ "font-size": "12px", opacity: 0.6, padding: "12px 0" }}>{ctx.t("logEmpty")}</div>
+              }
+            >
+              <Index each={entries()}>
+                {(entry) => (
+                  <div style={logRowStyle}>
+                    <span style={logTimeStyle}>{formatLogTime(entry().at)}</span>
+                    <span style={logModelsStyle}>
+                      {entry().from} → {entry().to}
+                    </span>
+                    <span style={logReasonStyle}>
+                      {entry().reason}
+                      <Show when={entry().attempt}>
+                        {(attempt) => (
+                          <span> · {ctx.t("logAttempt", { n: attempt() })}</span>
+                        )}
+                      </Show>
+                    </span>
+                  </div>
+                )}
+              </Index>
+            </Show>
+          </div>
+        </div>
+      )
+    }
+
+    /** One tab object: the host re-renders the label when the object changes. */
+    const logTab = {
+      id: "log",
+      get title() {
+        return ctx.t("logTitle")
+      },
+      label: () => <span style={{ "font-size": "12px" }}>{ctx.t("logTitle")}</span>,
+      closable: "hover" as const,
+    }
+
+    const FallbackBadge = (props: {
+      sessionID: string
+      session: () => any
+      compact: boolean
+      active: boolean
+    }) => {
       const badge = () => lastSwitch()[props.sessionID]
 
       const details = () => {
@@ -1631,8 +1841,7 @@ export default Plugin.define({
         return ctx.t("badgeDetails", { from: value.from, to: value.to, reason: value.reason })
       }
 
-      const show = () => {
-        if (!badge()) return
+      const showLast = () => {
         const title = ctx.t("badgeTitle")
         const alert = (ctx.dialogs as any)?.alert
         if (typeof alert === "function") {
@@ -1640,6 +1849,19 @@ export default Plugin.define({
           return
         }
         ctx.toast.show({ variant: "success", title, description: details(), duration: 8000 })
+      }
+
+      const show = () => {
+        if (!badge()) return
+
+        // The settings row decides: today's log in the side panel, or the last switch in a window.
+        if (config().clickAction === "log") {
+          const session = props.session()
+          if (session && openLog(session)) return
+          // No panel API in this build: fall through to the window.
+        }
+
+        showLast()
       }
 
       return (
@@ -1661,11 +1883,47 @@ export default Plugin.define({
     }
 
     try {
+      ctx.add(Panel, {
+        id: "log",
+        region: "side",
+        width: 340,
+        mobile: { title: ctx.t("logTitle"), order: 20, kind: "menu", icon: "arrow-undo-down" },
+        list: ({ open }) => (open.includes("log") ? [logTab] : []),
+        render: (props) => <SwitchLog session={() => props.session} />,
+      })
+    } catch (cause) {
+      // Desktop builds without the panel API keep the badge dialog instead.
+      log("fallback log panel unavailable", String(cause))
+    }
+
+    try {
+      ctx.add(MenuItem, {
+        id: "log",
+        menu: "session.panel",
+        get title() {
+          return ctx.t("logTitle")
+        },
+        icon: "arrow-undo-down",
+        run: () => {
+          const session = ctx.sessions.current()
+          if (session) openLog(session)
+        },
+      })
+    } catch (cause) {
+      log("fallback log menu unavailable", String(cause))
+    }
+
+    try {
       ctx.add(Slot, {
         at: "session.header",
         order: 10,
         render: (input) => (
-          <FallbackBadge sessionID={input.session.id} compact={input.compact} active={input.active} />
+          <FallbackBadge
+            sessionID={input.session.id}
+            session={() => input.session}
+            compact={input.compact}
+            active={input.active}
+          />
         ),
       })
     } catch (cause) {

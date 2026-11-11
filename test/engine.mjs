@@ -4,6 +4,7 @@ import { createRequire } from "node:module"
 const require = createRequire(import.meta.url)
 const gui = require("./.bundle.cjs")
 const def = gui.default
+const { Schema } = require("effect")
 
 const events = new Map()
 const data = {
@@ -25,6 +26,9 @@ const toasts = []
 const registered = []
 const confirmCalls = []
 const alerts = []
+const layoutCalls = []
+
+let sideOpened = true
 
 let confirmAnswer = true
 let interruptCalls = 0
@@ -97,6 +101,17 @@ const ctx = {
   },
   sessions: { current: () => session, list: () => [session, ...extraSessions] },
   screen: { current: () => ({ composer }) },
+  layout: {
+    open(key, target, options) {
+      layoutCalls.push(`${key} ${target.id} ${options?.tab ?? ""}`.trim())
+    },
+    side: {
+      opened: () => sideOpened,
+      toggle(target) {
+        layoutCalls.push(`side.toggle ${target.id}`)
+      },
+    },
+  },
   servers: { get: (id) => (id === "sidecar" ? { data } : undefined), list: () => ["sidecar"] },
   toast: { show: (input) => (toasts.push(input), { dismiss() {} }) },
   dialogs,
@@ -129,7 +144,48 @@ createRoot((close) => {
 check("published defaults have no models", def.stores.config.initial.models.length === 0)
 check("published defaults have no patterns", def.stores.config.initial.patterns.length === 0)
 check("published defaults confirm no models", def.stores.config.initial.confirmModels.length === 0)
-check("settings page and header badge registered", registered.length === 2, JSON.stringify(registered.map((entry) => entry.registry)))
+check("the badge opens the log by default", def.stores.config.initial.clickAction === "log")
+check(
+  "the config schema accepts the published defaults",
+  (() => {
+    try {
+      Schema.decodeUnknownSync(def.stores.config.schema)(def.stores.config.initial)
+      return true
+    } catch {
+      return false
+    }
+  })(),
+)
+check(
+  "settings page, log panel, menu item and header badge registered",
+  registered.length === 4 &&
+    registered.some((entry) => entry.item?.at === "session.header") &&
+    registered.some((entry) => entry.item?.region === "side") &&
+    registered.some((entry) => entry.item?.menu === "session.panel"),
+  JSON.stringify(registered.map((entry) => entry.registry?.id ?? entry.registry)),
+)
+
+const logPanel = registered.find((entry) => entry.item?.region === "side")?.item
+check(
+  "the log panel is listed only while its tab is open",
+  logPanel?.list({ open: [] }).length === 0 &&
+    logPanel?.list({ open: ["log"] }).length === 1 &&
+    logPanel.list({ open: ["log"] })[0]?.id === "log",
+  JSON.stringify(logPanel?.list({ open: ["log"] })),
+)
+
+const logMenu = registered.find((entry) => entry.item?.menu === "session.panel")?.item
+const beforeMenu = layoutCalls.length
+sideOpened = false
+logMenu?.run()
+check(
+  "the menu item opens the log tab and the side panel",
+  layoutCalls.length === beforeMenu + 2 &&
+    layoutCalls[layoutCalls.length - 2] === `${ctx.id}:log ${session.id} open` &&
+    layoutCalls[layoutCalls.length - 1] === `side.toggle ${session.id}`,
+  JSON.stringify(layoutCalls.slice(beforeMenu)),
+)
+sideOpened = true
 
 // A configured chain still works.
 config.models = ["ProviderA/model-a", "ProviderB/model-b", "ProviderC/model-c"]

@@ -30,6 +30,8 @@ config file.
   models from disconnected providers.
 - **Header badge** showing the last automatic switch: which model failed, which
   one took over, the reason, and when. It clears when you pick a model yourself.
+  A click on it either opens the side panel with today's switch log or shows the
+  last switch in a window, as set in **Header button click**.
 - **Toasts** for switches and for exhausted chains.
 - **Localized settings** (English and Russian) with an adaptive layout for newer
   and older desktop builds.
@@ -194,6 +196,7 @@ with the row.
 | First token timeout (seconds) | `120` | `0` disables the timeout. Long prompts may need more. |
 | Auto-resume | on | Send the resume prompt after switching. |
 | Resume prompt | `Continue` | Text sent after a switch. |
+| Header button click | Open today's log | A click on the header badge opens today's switch log in the side panel, or shows the last switch in a window. |
 | Fallback chain | empty | Ordered `provider/model-id` entries. |
 | Ask first (per chain row) | off | Confirm before switching to this model; use it for paid models. |
 
@@ -253,6 +256,12 @@ back to silent switching: marked rows are skipped and a toast reports why.
 
 The header badge is per session and in memory. It shows the last automatic
 switch until you choose a model yourself or another automatic switch replaces it.
+A click on the badge follows **Header button click**: by default it opens the
+side panel with the session's switch log for today (who switched to what, when,
+and why), and **Fallback log** in the session panel menu opens the same view.
+With **Show the last switch** selected, a click opens a small window instead. The
+log keeps the newest 60 switches per session; older days stay in memory but are
+not listed.
 
 Before switching, chain entries are resolved against the app's live model
 catalog, so provider ids keep their real casing and model ids keep their real
